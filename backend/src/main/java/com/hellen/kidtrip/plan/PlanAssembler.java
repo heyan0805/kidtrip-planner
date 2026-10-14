@@ -171,8 +171,12 @@ public final class PlanAssembler {
             // 和"这一天不需要交通"在数据上分得开 —— 前者会被编排层填掉，后者不会被。
             // alternatives 给空 list（不是 null）：备选走法和交通本身同时由编排层填，
             // 这里给 null 就得让每个读它的地方都判一次空。
+            // hotelAlternatives 同样给空 list（不是 null）：它由编排层在排完之后统一补上
+            // （见 PlanService.attachHotelAlternatives），理由和 transfer 一样 ——
+            // 它需要的是**完整候选池**，而在这一步池子已经被截到 prompt 上限了。
             days.add(new TravelDay(i + 1, theme, spots, null, List.of(),
-                    stay.hotel() == null ? null : toStay(stay.hotel(), stay.tips())));
+                    stay.hotel() == null ? null : toStay(stay.hotel(), stay.tips()),
+                    List.of()));
         }
 
         // ── 本地补排：模型留了空天，而池子里还有没用上的候选 ──────────────────
@@ -208,7 +212,8 @@ public final class PlanAssembler {
                     // 住宿那栏照旧带上 —— 补排的是"白天去哪"，和"晚上住哪"是两件事，
                     // 顺手把住宿也清掉会凭空抹掉模型排好的连住。
                     // 交通那栏同理带上：它跟"白天去哪"更没关系。
-                    days.set(i, new TravelDay(d.day(), FILLED_THEME, filled, d.transfer(), d.alternatives(), d.hotel()));
+                    days.set(i, new TravelDay(d.day(), FILLED_THEME, filled, d.transfer(),
+                            d.alternatives(), d.hotel(), d.hotelAlternatives()));
                 }
             }
         }
@@ -376,8 +381,15 @@ public final class PlanAssembler {
         return !byCode.containsKey(rawCode.strip().toUpperCase(Locale.ROOT));
     }
 
-    /** 把酒店候选回填成一个"今晚住这儿"。事实全部来自候选，只有 tips 来自模型。 */
-    private static HotelStay toStay(HotelCandidate h, String tips) {
+    /**
+     * 把酒店候选回填成一个"今晚住这儿"。事实全部来自候选，只有 tips 来自模型。
+     *
+     * 包级可见（不是 private）：PlanService 投影"备选酒店"时也要走这一步
+     * （见 PlanService.hotelStaysOf）。**同一份数据在两条路径上必须长得一模一样** ——
+     * 复制一份的话，以后给 HotelStay 加字段时总有一边会忘，而忘掉的那一边
+     * 恰好是"备选"，也就是最少有人点开看的那条路径。
+     */
+    static HotelStay toStay(HotelCandidate h, String tips) {
         return new HotelStay(
                 h.name(),
                 h.hotelId(),

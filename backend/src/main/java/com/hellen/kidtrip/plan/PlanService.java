@@ -24,7 +24,9 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 编排：把六段串成一条线，产出最终那份行程。
@@ -60,12 +62,26 @@ public class PlanService {
     /**
      * 送进 prompt 的酒店上限。
      *
-     * 为什么比景点少这么多（10 vs 30）：一天只要一家酒店，一份 6 天的行程最多用到 6 家，
+     * 为什么比景点少这么多（20 vs 30）：一天只要一家酒店，一份 6 天的行程最多用到 6 家，
      * 而"少换酒店"意味着实际用到的更少（常常 1~2 家）。
-     * 10 家已经远超所需，多塞的每一条都只是在稀释模型的注意力。
      * 而且酒店那行比景点行更长（多了星级和评分），token 账更算不过来。
+     *
+     * ⚠️ 2026-10-14 从 10 提到 20。**这不是"顺手放宽"，是改成两档查询之后必须跟着改的**：
+     *    上游一次只回一档，默认配置 `"3;4"` 会查两次、池子大约 20 家。
+     *    而下面的截断是 `subList(0, MAX)` —— 按池子的插入顺序取前 N。
+     *    上限还是 10 的话，**第二个档位一家都进不来**，等于白花一次调用，
+     *    而且是从界面上完全看不出来的那种白花（候选照样有、行程照样排）。
      */
-    private static final int MAX_HOTELS_IN_PROMPT = 10;
+    private static final int MAX_HOTELS_IN_PROMPT = 20;
+
+    /**
+     * 每天给用户看几家"别的酒店"。
+     *
+     * 为什么是 3：和机票那边（每天最多一条备选）不同，酒店的可比维度少
+     * （就是价格 + 档次 + 离景点远近），3 家足够画出一条"便宜/居中/好一点"的梯度。
+     * 再多就变成一份酒店列表，而用户要的是"今晚住哪儿"这一个决定。
+     */
+    private static final int MAX_HOTEL_ALTERNATIVES = 3;
 
     private final RetrievalService retrievalService;
     private final PlanComposer composer;
@@ -253,6 +269,13 @@ public class PlanService {
         // 查只依赖画像，挂依赖装配后的天数。
         progress.mark(runId, GenerationProgress.Stage.VALIDATE);
         List<TravelDay> days = attachLegs(assembled.days(), legs);
+
+        // ── 住宿备选：今晚还能住哪儿（2026-10-14）─────────────────────────
+        // 和上面的交通是同一类的"后处理"：都发生在装配之后，因为都需要装配层拿不到的东西
+        // （交通要真实车次，备选要**未截断**的完整酒店池）。
+        // 它排在 attachLegs 后面而不是前面，只是因为读起来顺 —— 交通讲"怎么到"，
+        // 备选讲"住哪儿"，正好是一天的两个落点。
+        days = attachHotelAlternatives(days, hotelStaysOf(pool.candidates()));
         warnLegConflicts(days, legs, legWarnings);
 
         // ── 地理跨度：排完之后拿真实坐标回头校一遍（B11）──────────────────
@@ -401,15 +424,161 @@ public class PlanService {
         if (legs.outbound().primary() != null) {
             TravelDay first = days.get(0);
             withLegs.set(0, new TravelDay(first.day(), first.theme(), first.spots(),
-                    legs.outbound().primary(), legs.outbound().alternatives(), first.hotel()));
+                    legs.outbound().primary(), legs.outbound().alternatives(), first.hotel(),
+                    first.hotelAlternatives()));
         }
         if (legs.inbound().primary() != null) {
             int last = days.size() - 1;
             TravelDay day = days.get(last);
             withLegs.set(last, new TravelDay(day.day(), day.theme(), day.spots(),
-                    legs.inbound().primary(), legs.inbound().alternatives(), day.hotel()));
+                    legs.inbound().primary(), legs.inbound().alternatives(), day.hotel(),
+                    day.hotelAlternatives()));
         }
         return withLegs;
+    }
+
+    /* ============================================================
+     * 住宿备选 —— "今晚还能住哪儿"
+     * ============================================================ */
+
+    /**
+     * 给每天挂上"同城还能住哪几家"。
+     *
+     * ── 为什么是后处理，而不是装配时一并填 ───────────────────────────
+     *   装配拿到的酒店池是**截断过的**（MAX_HOTELS_IN_PROMPT）。而备选要的是**完整池子**，
+     *   因为"给模型看多少"和"给用户多少可选"是两件事 —— 景点那边早就这么分了
+     *   （见 spotPoolOf：模型看 30 条，用户看到全部 41 条）。酒店现在是同一个道理。
+     *   把它做成和 attachLegs 一样的后处理，是为了**让"截断"和"投影"在代码上分得开**：
+     *   只要它和装配写在同一个方法里，早晚有人会顺手用那个截断后的变量。
+     *
+     * ── 为什么每天都填，而不是只填连住段的第一天 ────────────────────
+     *   连住时相邻几天的备选是同一份，确实是重复的。但判断"哪几天属于同一段连住"
+     *   需要比较 hotelId 并回溯，而前端 mergeStays 已经在做这件事了（它本来就要合并显示）。
+     *   契约层多加一个"能算出来的"字段，就多一个能对不上的地方 ——
+     *   这条规矩在这个项目里已经写过好几次（见 TravelDay 的注释）。
+     */
+    static List<TravelDay> attachHotelAlternatives(List<TravelDay> days, List<HotelStay> hotelPool) {
+        // ⚠️ hotelPool 的判空必须在 isEmpty 之前 —— 这是写完当天被测试抓出来的：
+        //    写成 `hotelPool.isEmpty()` 时，传 null 会 NPE，而"没有酒店候选"是一个
+        //    完全正常的输入（needHotel=false 的那次生成）。这个方法本来就是为了
+        //    "没东西可挂时原样返回"，却在最该兜住的那个输入上崩了。
+        if (days.isEmpty() || hotelPool == null || hotelPool.isEmpty()) {
+            return days;
+        }
+        List<TravelDay> out = new ArrayList<>(days.size());
+        for (TravelDay d : days) {
+            String chosen = d.hotel() == null ? null : d.hotel().hotelId();
+            out.add(new TravelDay(d.day(), d.theme(), d.spots(), d.transfer(), d.alternatives(),
+                    d.hotel(), hotelAlternativesOf(hotelPool, chosen)));
+        }
+        return out;
+    }
+
+    /**
+     * 从酒店池里挑出"除主选之外还能住的几家"。
+     *
+     * ── 取哪几家：**跨档轮转**，不是"最便宜的 3 家" ──────────────────
+     *   这是真跑一次才发现的（2026-10-14，广州→珠海 3 天）：配置改成查两档之后，
+     *   备选清单里全是"舒适型"（¥108 / ¥112 / ¥145）—— 因为珠海最便宜的几家恰好都在舒适档。
+     *   第二档（四星/高档）**一家都没露出来**。
+     *
+     *   后果不只是"少看了几家"：那样一来第二档那次查询就是**纯浪费** ——
+     *   多花一次上游调用、多占一份 30 秒预算，换来的东西用户永远看不到。
+     *   而这个功能存在的理由恰恰是"用户觉得档次高，想看到别的选择"。
+     *
+     *   所以规则是：**按 star 分组，各组轮流出一家**（组内按价格升序），取满 3 家，
+     *   再把这 3 家按价格升序展示。轮转负责"跨档"，最后的排序负责"读起来不乱"——
+     *   两件事分开做，是因为它们回答的是不同的问题（选出谁 / 怎么摆）。
+     *
+     * ⚠️ 只有一个档位时（配置写成 `"3"`），轮转自然退化成"按价格取前 3" ——
+     *    不需要为单档单独写一条分支。
+     *
+     * ── 价格未知（null）排最后 ─────────────────────────────────────
+     *   `null` 的含义是"飞猪上没有可订房型"，不是"免费"。把它当成 ¥0 排到最前面，
+     *   用户点进去会发现订不了 —— 那比不显示更糟。（HotelStay 注释里那句说的是同一件事。）
+     *
+     * 抽成 static 纯函数是为了能被单测直接钉住 —— 这里有三条真会写错的规则：
+     * 排除主选、跨档轮转、null 排最后。
+     */
+    static List<HotelStay> hotelAlternativesOf(List<HotelStay> pool, String excludeHotelId) {
+        if (pool == null || pool.isEmpty()) {
+            return List.of();
+        }
+        Comparator<HotelStay> byPrice = Comparator.comparing(HotelStay::priceYuan,
+                Comparator.nullsLast(Comparator.naturalOrder()));
+
+        // ① 先排除主选，再取。反过来（先取前 N 再排除）会让主选占掉一个名额 ——
+        //    池子是 [主选, 便宜, 中, 贵] 时就只给得出 2 家，而且不报错。
+        List<HotelStay> candidates = new ArrayList<>();
+        for (HotelStay h : pool) {
+            if (excludeHotelId == null || !excludeHotelId.equals(h.hotelId())) {
+                candidates.add(h);
+            }
+        }
+        candidates.sort(byPrice);
+
+        // ② 按档位分组（组内已经是价格升序，因为上面刚整体排过，分组保持插入顺序）
+        Map<String, List<HotelStay>> byTier = new LinkedHashMap<>();
+        for (HotelStay h : candidates) {
+            byTier.computeIfAbsent(tierOf(h), k -> new ArrayList<>()).add(h);
+        }
+
+        // ③ 轮转取。一轮从每个档位各拿一家，拿完一圈再拿第二圈 ——
+        //    这样"档位少但每家都便宜"和"档位多"两种情况都不会让某一档彻底消失。
+        List<HotelStay> picked = new ArrayList<>();
+        for (int round = 0; picked.size() < MAX_HOTEL_ALTERNATIVES; round++) {
+            boolean anyThisRound = false;
+            for (List<HotelStay> tier : byTier.values()) {
+                if (round < tier.size()) {
+                    picked.add(tier.get(round));
+                    anyThisRound = true;
+                    if (picked.size() >= MAX_HOTEL_ALTERNATIVES) {
+                        break;
+                    }
+                }
+            }
+            if (!anyThisRound) {
+                break;
+            }
+        }
+
+        // ④ 展示顺序：价格升序。用户看这一行是为了找"更便宜的"，顺序乱了就白瞎了。
+        picked.sort(byPrice);
+        return List.copyOf(picked);
+    }
+
+    /**
+     * 档位标识 —— 直接用 star 那个中文词（"舒适型" / "四星级" / "高档型" …）。
+     *
+     * 为什么不映射成数字：实测上游的档次词不一定和星级对应
+     * （同一档里"四星级"和"高档型"混着出现，而 `--hotel-stars 4` 回来的就是这两种）。
+     * 硬做一张映射表，一旦上游多出一个新词（比如"轻奢型"）就会静默归到"未知"那一组，
+     * 而"未知"那一组会和其他档一起轮转 —— 结果是档次跨度看起来对了、其实错了。
+     * 用原词做 key：新词自己成一组，最多是"多一组"，不会把别的档挤掉。
+     */
+    private static String tierOf(HotelStay h) {
+        return h.star() == null ? "" : h.star();
+    }
+
+    /**
+     * 从混合候选池里挑出**酒店**，投影成界面用的备选。
+     *
+     * 和 spotPoolOf 是一对：那边挑景点、这边挑酒店，两个判断都写成 `instanceof` 的正向筛选。
+     * 顺序**不在这里排**（原样保留飞猪的相关性顺序）—— 排序是给用户看的那一步的事
+     * （hotelAlternativesOf 里的价格升序），两者分开，将来改展示策略不会动到数据。
+     */
+    static List<HotelStay> hotelStaysOf(List<Candidate> candidates) {
+        List<HotelStay> out = new ArrayList<>();
+        if (candidates == null) {
+            return out;
+        }
+        for (Candidate c : candidates) {
+            if (c instanceof HotelCandidate h) {
+                // tips 传 null：那是模型"为什么住这儿"的表达，备选没有经过模型判断。
+                out.add(PlanAssembler.toStay(h, null));
+            }
+        }
+        return out;
     }
 
     /** orDefaults 已经保证 >= 1，这里只是把"万一"兜住 —— 它要去参与日期减法 */

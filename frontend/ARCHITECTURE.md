@@ -1,7 +1,7 @@
 # 童行 · 带娃旅游规划器 —— 前端代码说明
 
 > 对象：本仓库的 `frontend/`（Vite + React 19 + TypeScript）
-> 结论先行：**9 个源文件（2847 行，其中约 40% 是注释），零路由、零状态库、零测试框架。
+> 结论先行：**9 个源文件（3032 行，其中 40% 是注释），零路由、零状态库、零测试框架。
 > 整个 `src/` 里只有一处 `fetch`。**
 
 ---
@@ -44,15 +44,15 @@ frontend/
    ├─ index.css                   2 行   三行 @tailwind 指令
    ├─ types/
    │  ├─ flyai.ts                131 行  飞猪 FlyAI 的**原始返回形状**（第三方形状）
-   │  └─ plan.ts                 529 行  我们自己的契约（前后端共享的领域类型）
+   │  └─ plan.ts                 559 行  我们自己的契约（前后端共享的领域类型）
    ├─ api/
    │  ├─ http.ts                 249 行  唯一 HTTP 出口（协议、超时、Mock 降级）
-   │  └─ plan.ts                 377 行  两个业务接口 + 进度轮询 + 各自的假数据
+   │  └─ plan.ts                 431 行  两个业务接口 + 进度轮询 + 各自的假数据
    ├─ hooks/
    │  └─ usePlanChat.ts          539 行  对话状态机（前端**全部**业务状态在这里）
    └─ pages/
       └─ TravelPlanner/
-         └─ index.tsx            1003 行  唯一页面 + 8 个局部组件 + 10 个纯函数（顶层共 21 个声明）
+         └─ index.tsx            1104 行  唯一页面 + 9 个局部组件 + 10 个纯函数（顶层共 25 个声明）
 ```
 
 ### 1.1 分层依据：按"变化的原因"切，不按"文件类型"切
@@ -77,8 +77,8 @@ frontend/
 
 **③ 没有 `components/` 目录**
 
-全部 8 个子组件（`ProfileCard` / `GeneratingPanel` / `StepLine` / `PlanView` / `DayCard` /
-`SpotRow` / `TransferLine` / `AlternativeLine`）
+全部 9 个局部组件（`ProfileCard` / `GeneratingPanel` / `StepLine` / `PlanView` / `DayCard` /
+`SpotRow` / `TransferLine` / `AlternativeLine` / `HotelAlternativeLine`）
 都是 `pages/TravelPlanner/index.tsx` 里的**局部函数**，只有 `TravelPlanner` 一个 `export default`。
 理由是它们都是"这一页专用"的：`DayCard` 换个页面就没有意义。
 **只有当第二个页面需要同一个组件时，才把它搬到 `components/`。** 现在没有第二个页面。
@@ -456,7 +456,7 @@ TravelPlan { summary, days[], warnings[], provenance, spotPool[] }
 
 ## 6. 建议的读代码顺序
 
-从**形状**读到**逻辑**，别从页面开始（页面那 1003 行里大半是 JSX 和 `className`，容易劝退）：
+从**形状**读到**逻辑**，别从页面开始（页面那 1104 行里大半是 JSX 和 `className`，容易劝退）：
 
 1. `src/types/plan.ts` —— **只看前 130 行**（`Message` / `TravelParams` / `PlanChatRequest` / `RetrievalPlan`）。
    先知道"数据长什么样"，后面全是它的搬运和渲染。
@@ -464,7 +464,7 @@ TravelPlan { summary, days[], warnings[], provenance, spotPool[] }
 3. `src/api/plan.ts` —— 只有两个函数，一分钟看完。
 4. `src/hooks/usePlanChat.ts` —— **最值得花时间的一站**。3.4 的三个难点都在这里。
 5. `src/pages/TravelPlanner/index.tsx` —— 前四步走完再看。
-   21 个顶层声明 = **9 个组件**（页面本身 + 8 个局部）+ **10 个纯函数** + 2 个常量。
+   25 个顶层声明 = **10 个组件**（页面本身 + 9 个局部）+ **10 个纯函数** + 2 个常量 + 3 个局部 `interface`。
    那 10 个纯函数（`missingLabels` / `renderField` / `formatSeconds` / `alternativesFor` /
    `distanceKm` / `centroid` / `formatKm` / `hhmm` / `formatDuration` / `mergeStays`）
    可以单独读，它们不碰任何 React 概念。
@@ -508,7 +508,7 @@ TravelPlan { summary, days[], warnings[], provenance, spotPool[] }
 | 2 | 根 `tsconfig.json` 是**解决方案文件**（`"files": []` + references） | `npx tsc --noEmit` 在根目录是**空转**。真正的类型检查是 `npm run build` 里的 `tsc -b` |
 | 3 | `README.md` 还是 Vite 模板原文 | 看完不知道这是干什么的 |
 | 4 | `index.html` 的 `<title>` 还是 `frontend` | 浏览器标签页显示"frontend"（`lang` 已改成 `zh-CN`） |
-| 5 | `pages/TravelPlanner/index.tsx` **单文件 1003 行** | 已经到该拆的线上了；`DayCard` / `SpotRow` / `TransferLine` / `AlternativeLine` 是最先该拆出去的几个 |
+| 5 | `pages/TravelPlanner/index.tsx` **单文件 1104 行** | 已经**越过了**该拆的线；`DayCard` / `SpotRow` / `TransferLine` / `AlternativeLine` / `HotelAlternativeLine` 是最先该拆出去的几个 |
 | 6 | 没有路径别名（没有 `@/`） | 全部相对路径（`'../../hooks/usePlanChat'`）。层次再深就会开始难看，但现在是 3 层，不值得为它改 tsconfig + vite 两处 |
 | 7 | `spotPool` 里的点也包含已排进日程的那些 | 这是**故意的**（见 `types/plan.ts` 的三条性质）：用户把 A 换成 B 后 A 要能换回来。切片由前端的 `alternativesFor` 做，**每换一次都要重切** |
 
@@ -525,5 +525,5 @@ TravelPlan { summary, days[], warnings[], provenance, spotPool[] }
 | `api/http.ts` | 唯一出口：协议 + 超时 + 错误分类 + Mock 降级 |
 | `api/plan.ts` | 三个接口（对话 / 生成 / 进度）+ 前两个各自的假数据 |
 | `hooks/usePlanChat.ts` | 前端全部业务状态；镜像 ref、并发闸门、稀疏覆盖都在这 |
-| `pages/TravelPlanner/index.tsx` | 唯一页面；8 个局部组件 + 10 个纯函数 |
+| `pages/TravelPlanner/index.tsx` | 唯一页面；9 个局部组件 + 10 个纯函数 |
 | `vite.config.ts` | dev server 和 `/api` 代理（唯一一处转发配置） |

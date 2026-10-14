@@ -42,12 +42,30 @@ import java.util.List;
  *   ⚠️ 但它**不是**"飞机的专用字段"：里面装的是 Transfer（带 mode），
  *      以后要放大巴/轮渡也是往这里放。字段名叫 alternatives 而不是 flight，
  *      是为了让加第三种载体时**不用改契约**。
+ *
+ * ── `hotelAlternatives`：今晚**还能住哪儿**（2026-10-14 加）────────────
+ *   和上面的 alternatives 是同一个思路，只是换成了住宿：
+ *   hotel 是"主选"（模型的判断，会进 prompt），hotelAlternatives 是**另外几家**，
+ *   同样**不进 prompt**，纯粹给用户看。
+ *
+ *   为什么住宿也需要这一层：上游一次查回 10 家，模型只挑 1 家，剩下 9 家原本直接丢掉 ——
+ *   而用户看到的是一张"就住这儿"的卡片，连"还有别的选择"都不知道。
+ *   和机票的区别是它**不来自另一次查询**：这些酒店本来就在候选池里，
+ *   我们只是没把它露出来。（"给模型看多少"和"给用户多少可选"是两件事 ——
+ *   景点那边早就这么分了，见 PlanService 里备选池那段注释。）
+ *
+ *   ⚠️ 连住时同一个酒店覆盖多天，所以**相邻几天的备选列表会是同一份**。
+ *      这是刻意不去的重：去掉就得在这里引入"哪几天是同一段连住"的知识，
+ *      而那是前端 mergeStays 已经在算的事（它一行比较 hotelId 就有了）。
+ *      契约层多一个"能算出来的"字段，就多一个能对不上的地方。
  */
 public record TravelDay(int day, String theme, List<TravelSpot> spots, Transfer transfer,
-                        List<Transfer> alternatives, HotelStay hotel) {
+                        List<Transfer> alternatives, HotelStay hotel,
+                        List<HotelStay> hotelAlternatives) {
 
     public TravelDay {
         spots = spots == null ? List.of() : List.copyOf(spots);
         alternatives = alternatives == null ? List.of() : List.copyOf(alternatives);
+        hotelAlternatives = hotelAlternatives == null ? List.of() : List.copyOf(hotelAlternatives);
     }
 }

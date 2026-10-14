@@ -29,15 +29,25 @@ class FlyaiPropertiesTest {
     }
 
     @Test
-    @DisplayName("配置里没写 hotel-stars → 用默认 4,5（不能变成'不筛'）")
+    @DisplayName("配置里没写 hotel-stars → 用默认 3;4（不能变成'不筛'）")
     void missingKeyFallsBackToDefault() {
-        assertEquals("4,5", with(null).hotelStars());
+        // 默认从 "4,5" 改成 "3;4" 的理由是"用户只看得到豪华档"，见 FlyaiProperties 注释。
+        // 这条断言钉的是**默认值本身**：它一变，就该有人来看一眼是不是有意的。
+        assertEquals("3;4", with(null).hotelStars());
     }
 
     @Test
-    @DisplayName("配置里显式写空串 → 保持空串，表示'关掉星级筛'（不能填回默认）")
+    @DisplayName("配置里显式写空串 → 保持空串，表示'关掉档次筛'（不能填回默认）")
     void explicitEmptyMeansDisabled() {
         assertEquals("", with("").hotelStars());
+    }
+
+    @Test
+    @DisplayName("分号分隔的多档原样保留（分号是'查几次'的语法，不能被当成空值处理）")
+    void semicolonSeparatedTiersSurvive() {
+        // 配置层只负责"别动它"。分号怎么切开、切成几档，是 RetrievalService.hotelStarTiers 的事。
+        assertEquals("3;4", with("3;4").hotelStars());
+        assertEquals("3;4,5", with("3;4,5").hotelStars());
     }
 
     @Test

@@ -1,5 +1,6 @@
 import { request } from './http'
 import type {
+  HotelStay,
   PlanChatData,
   PlanChatRequest,
   PlanGenerateRequest,
@@ -286,6 +287,53 @@ function mockInbound(origin: string, city: string): Transfer {
   }
 }
 
+/**
+ * 「今晚还能住哪儿」的假数据 —— 三家，**价格从低到高**（后端就是按这个顺序给的，见
+ * PlanService.hotelAlternativesOf）。
+ *
+ * 为什么假数据也要造这一层：它是 2026-10-14 新加的渲染分支，而这条分支在真实路上
+ * 只在"后端查回多个档位"时才出现。降级路存在的全部意义是"出事那天还能演示"，
+ * 一条永远画不出来的分支等于没有 —— 和当初给交通行补 `.invalid` 链接是同一个理由。
+ *
+ * ── 三个数字都是实测的（上海，2026-11-17 入住，`--hotel-stars 3` / `4` 各查一次）─
+ *   易佰酒店     ¥143  舒适型
+ *   如家旗下     ¥158  舒适型
+ *   和颐         ¥283  高档型
+ *   不只是"看起来像"：它们**刻意分布在两个档位上**，因为"备选要跨档"正是这一层
+ *   存在的理由（如果三家都是舒适型，用户会觉得"那何必给我选"）。
+ *
+ * ⚠️ bookUrl 用 `.invalid` 占位（RFC 2606 保留 TLD，永不解析）—— 和交通行、酒店主选
+ *    是同一个规矩：这是整份假数据里**唯一不能编得像真的**字段。时刻编错了有"这是假的"兜着，
+ *    而一个看起来正常的飞猪链接会把用户带到**别家酒店**上，而且他不会察觉。
+ */
+function mockHotelAlternatives(): HotelStay[] {
+  const alt = (
+    n: number,
+    name: string,
+    priceYuan: number,
+    star: string,
+  ): HotelStay => ({
+    name: `（假数据）${name}`,
+    hotelId: `mock-hotel-alt-${n}`,
+    priceYuan,
+    star,
+    rating: null,
+    address: '示例地址（假数据）',
+    lat: null,
+    lng: null,
+    // `.invalid` 而不是 null：null 会让「去飞猪订」这个分支在降级路上从不渲染，
+    // 而那正是最需要被看到一眼的地方（主选、备选两处用的是同一个字段）。
+    bookUrl: `https://example.invalid/mock-hotel-${n}`,
+    imageUrl: '',
+    tips: null,
+  })
+  return [
+    alt(1, '易佰酒店示例店', 143, '舒适型'),
+    alt(2, '如家旗下示例店', 158, '舒适型'),
+    alt(3, '和颐示例店', 283, '高档型'),
+  ]
+}
+
 async function mockPlan(req: PlanGenerateRequest): Promise<TravelPlan> {
   await delay(800)
   const p = req.params
@@ -347,10 +395,16 @@ async function mockPlan(req: PlanGenerateRequest): Promise<TravelPlan> {
         address: '示例地址',
         lat: null,
         lng: null,
-        bookUrl: 'https://example.invalid/mock',
+        // 同上：不是 null，否则「去飞猪订」这个分支在降级路上从不渲染
+        bookUrl: 'https://example.invalid/mock-hotel',
         imageUrl: '',
         tips: '连住不用收拾行李',
       },
+      // 备选酒店：**每一天都填同一份**，照后端的行为（PlanService.attachHotelAlternatives
+      // 就是每天都挂，因为"哪几天算同一段连住"是前端 mergeStays 算的事）。
+      // 假数据要是只填第一天，"前端有没有真的按连住去重"这件事就验不出来了 ——
+      // 而那恰恰是这一层最容易写错的地方（漏掉 first 判断 → 同一份清单在屏幕上出现三遍）。
+      hotelAlternatives: mockHotelAlternatives(),
     })),
     warnings: ['这是本地假数据（VITE_USE_MOCK 生效），不是后端返回的真实行程'],
     // 备选池里前 days 条**就是日程里的那几条**（同 id）—— 这不是冗余，是契约规定的：

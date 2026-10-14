@@ -88,4 +88,40 @@ class RetrievalServiceTest {
         assertEquals(0, run.warnings.size(),
                 "null 是'上游没告诉我们'，不是'经济型' —— 把它当经济型会让这条告警在小城市天天误报");
     }
+
+    /* ============================================================
+     * 档次分档的解析 —— 多档查询的入口
+     * ============================================================ */
+
+    @Test
+    @DisplayName("分档：'3;4' → 两次查询（这是'多档'的全部机制）")
+    void semicolonMakesTwoTiers() {
+        assertEquals(List.of("3", "4"), RetrievalService.parseHotelStarTiers("3;4"));
+    }
+
+    @Test
+    @DisplayName("分档：逗号**不是**分档符 —— '4,5' 仍然是一次查询（老写法必须继续可用）")
+    void commaIsNotATierSeparator() {
+        // 这一条是分号/逗号分工的守门人。要是有人"顺手统一成逗号"，
+        // 多档就会静默退化成"一个档位组"，而界面上只会表现为"备选怎么都是同一档"。
+        assertEquals(List.of("4,5"), RetrievalService.parseHotelStarTiers("4,5"));
+    }
+
+    @Test
+    @DisplayName("分档：空档位被丢掉（'3;;4' 不能变成一次'空参数'的查询）")
+    void blankTiersAreDropped() {
+        // 空档位发出去 = 上游不筛 = 青旅混回来。而这一路上没有任何地方会报错。
+        assertEquals(List.of("3", "4"), RetrievalService.parseHotelStarTiers("3;;4"));
+        assertEquals(List.of("3"), RetrievalService.parseHotelStarTiers("3;"));
+        assertEquals(List.of("3"), RetrievalService.parseHotelStarTiers(";3;"));
+        assertEquals(List.of(), RetrievalService.parseHotelStarTiers(";;"));
+    }
+
+    @Test
+    @DisplayName("分档：空串 → 空列表（= 显式关掉筛选，会走'不带参数查一次'那条路）")
+    void blankMeansDisabled() {
+        assertEquals(List.of(), RetrievalService.parseHotelStarTiers(""));
+        assertEquals(List.of(), RetrievalService.parseHotelStarTiers("   "));
+        assertEquals(List.of(), RetrievalService.parseHotelStarTiers(null));
+    }
 }

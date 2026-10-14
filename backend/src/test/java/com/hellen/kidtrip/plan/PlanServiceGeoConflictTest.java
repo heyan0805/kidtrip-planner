@@ -51,7 +51,7 @@ class PlanServiceGeoConflictTest {
     }
 
     private static TravelDay day(int n, List<TravelSpot> spots, HotelStay hotel) {
-        return new TravelDay(n, "当天主题", spots, null, List.of(), hotel);
+        return new TravelDay(n, "当天主题", spots, null, List.of(), hotel, List.of());
     }
 
     /* 桂林那次的真实坐标（飞猪缓存） */

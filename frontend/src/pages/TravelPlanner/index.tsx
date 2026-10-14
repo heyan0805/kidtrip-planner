@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { REQUIRED_FIELDS, applySwaps, swapKey, usePlanChat } from '../../hooks/usePlanChat'
 import type { SpotEdits } from '../../hooks/usePlanChat'
 import type {
+  HotelStay,
   PlanProgress,
   PlanProgressStep,
   SpotOption,
@@ -545,7 +546,8 @@ function DayCard({
   onRestore,
 }: {
   day: TravelDay
-  stay?: string
+  /** 这一段住宿的标注（"连住 N 晚" + 是不是第一晚）。undefined = 这天不是住宿段头一晚 */
+  stay?: StayMark
   isLast: boolean
   alternatives: Alternative[]
   swaps: SpotEdits
@@ -609,7 +611,23 @@ function DayCard({
               {day.hotel.priceYuan === null ? '房价未知' : `¥${day.hotel.priceYuan}/晚`}
             </span>
             {day.hotel.star && <span className="ml-2 text-gray-400">{day.hotel.star}</span>}
-            {stay && <span className="ml-2 text-gray-400">{stay}</span>}
+            {stay?.label && <span className="ml-2 text-gray-400">{stay.label}</span>}
+            {/* 订房入口。⚠️ 在 2026-10-14 之前这里**什么都没有** ——
+                hotel.bookUrl 后端一直在发，前端一个字都没渲染，也就是说
+                整份行程里唯一能直接把用户带到酒店的那条路，一直是断的。
+                交通行一直有"去飞猪看这趟车"，住宿这一行却没有，纯粹是漏了。
+                实测这个链接是带入离日期的飞猪详情页（不是首页、不是搜索页），
+                点开就是"你要去的那几天"的房态 —— 所以它值得一个明确的动作词。 */}
+            {day.hotel.bookUrl && (
+              <a
+                href={day.hotel.bookUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="ml-2 text-emerald-700 underline hover:text-emerald-900"
+              >
+                去飞猪订
+              </a>
+            )}
           </p>
         ) : (
           /* ⚠️ hotel === null 有两种完全不同的含义，必须分开显示：
@@ -621,6 +639,22 @@ function DayCard({
           </p>
         )}
         {day.hotel?.tips && <p className="mt-1 text-xs text-gray-500">{day.hotel.tips}</p>}
+
+        {/* ── 今晚还能住哪儿 ───────────────────────────────────────────────
+            排在主选下面：它和主选回答的是同一个问题（今晚住哪），只是另一个答案。
+            和机票那个备选行同级，但有一个关键差别 —— 它**不花额外的上游调用**：
+            这些酒店本来就在候选池里（上游一次回 10 家，模型只挑 1 家，剩下的原本直接丢掉）。
+
+            ⚠️ 只在住宿段的**第一晚**渲染（`stay?.first`）：连住时后端每天都会带同一份备选，
+               天天画就是同一个清单在屏幕上出现三遍。段内的"哪几天算连住"是 mergeStays 算的。
+
+            ⚠️ 和 alternatives 一样要 `?? []`：前端静态包与后端 jar 不同版本时，
+               旧后端不发这个字段，`.map` 会抛错并让 React 把**整份行程**卸载掉（白屏）。
+               一处 `??` 把最坏结果从"白屏"降成"少一行"，不是通用兼容层。 */}
+        {stay?.first &&
+          (day.hotelAlternatives ?? []).map((h) => (
+            <HotelAlternativeLine key={h.hotelId} hotel={h} />
+          ))}
       </div>
     </article>
   )
@@ -961,6 +995,56 @@ function AlternativeLine({ transfer: t }: { transfer: Transfer }) {
 }
 
 /**
+ * 今晚**还能住哪儿** —— 同城查到、但模型没选的那几家。
+ *
+ * ── 为什么它必须存在（2026-10-14）────────────────────────────────
+ *   在这之前，用户的屏幕上每天只有**一家**酒店，而且他不知道那是从 10 家里挑的。
+ *   后端一次查回 10 家，模型只挑 1 家，剩下 9 家连"存在过"都不显示 ——
+ *   这跟机票那边把alternatives藏起来是同一个毛病，只是住宿更不容易被察觉：
+ *   用户不觉得"只给一家"有什么问题，只会觉得"这家有点贵"。
+ *   而这个项目的立场一直是：**给模型看多少、给用户多少可选，是两件事。**
+ *
+ * ── 三个刻意的取舍 ──────────────────────────────────────────────
+ * ① **配色弱一档（灰调 + 琥珀标签），不抢主选。**
+ *    今晚睡哪儿只有一个答案，主选是模型替这份行程做过的判断（离第二天第一个点近之类）。
+ *    备选是"你也可以选它"，不是"系统也推荐它"。
+ * ② **顺序是价格升序（后端排好的），顺着展示就行。**
+ *    用户的原话是"档次似乎有点高" —— 那让他一眼看到更便宜的，就是这一行最大的用处。
+ *    别在这里重新按距离或别的什么排：那会把"最便宜的"埋到中间去。
+ * ③ **每一条都带订房链接。** 备选如果只能看不能订，那它就只是个装饰。
+ *    它和主选用的是同一个 bookUrl 字段（带入离日期的飞猪详情页），所以是能直接下单的。
+ */
+function HotelAlternativeLine({ hotel: h }: { hotel: HotelStay }) {
+  return (
+    <div className="mb-2 text-gray-500">
+      <p className="flex flex-wrap items-baseline gap-x-2">
+        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-800">
+          也可以住
+        </span>
+        <span className="mr-0.5">🏨</span>
+        <span>{h.name}</span>
+        <span className="text-gray-400">
+          {/* 每晚房价 —— 和主选同一个量纲，也和上面的门票不是一个量纲 */}
+          {h.priceYuan === null ? '房价未知' : `¥${h.priceYuan}/晚`}
+        </span>
+        {h.star && <span className="text-gray-400">{h.star}</span>}
+        {h.bookUrl && (
+          <a
+            href={h.bookUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-gray-400 underline hover:text-gray-700"
+          >
+            去飞猪订
+          </a>
+        )}
+      </p>
+      {h.address && <p className="mt-0.5 text-xs text-gray-400">{h.address}</p>}
+    </div>
+  )
+}
+
+/**
  * "2026-11-17T08:36" → "08:36"。
  *
  * 只切时刻，但**不要理解成"当天的时间"** —— 日期本身在 t.arrDateTime 里，
@@ -979,14 +1063,31 @@ function formatDuration(minutes: number): string {
 }
 
 /**
+ * 一段住宿在界面上的标注。
+ *
+ * ⚠️ 为什么不是直接一个字符串（"连住 3 晚"）—— 那是 2026-10-14 为了**备选酒店**改的：
+ *   备选（hotelAlternatives）要挨着住宿卡片显示，而连住时后端每天都会带上同一份备选，
+ *   天天渲染就重复了。所以需要知道"哪一晚是这一段的第一晚"。
+ *   `first` 就是这个信息；`label` 仍然是原来那个"连住 N 晚"（只有 1 晚时是空串）。
+ *
+ * 为什么不另起一个 Map 装 first：两个 Map 的 key 集合必须永远一致，
+ * 而它们是在同一个 while 循环里生成的 —— 拆开就多了一个"哪天对不上"的机会。
+ */
+interface StayMark {
+  label: string
+  first: boolean
+}
+
+/**
  * 把"第 N 天住哪"变成"这家酒店覆盖了哪几天"。
  *
- * 返回 Map<起始天, "连住 N 晚">，只在连续的第一天带这个标注。
+ * 只给**连续段的第一天**放一个 entry（label + first），段内其余天不放 ——
+ * 读的时候 `stays.get(day)` 是 undefined，正好就是"这不是第一晚"。
  * 纯函数，和 PlanAssembler 里"酒店允许重复"那条规矩是配套的：
  * 后端保留重复（因为那是对的），前端负责把它渲染成一个决定。
  */
-function mergeStays(days: TravelDay[]): Map<number, string> {
-  const out = new Map<number, string>()
+function mergeStays(days: TravelDay[]): Map<number, StayMark> {
+  const out = new Map<number, StayMark>()
   let i = 0
   while (i < days.length) {
     const h = days[i].hotel
@@ -996,7 +1097,7 @@ function mergeStays(days: TravelDay[]): Map<number, string> {
     }
     let n = 1
     while (i + n < days.length && days[i + n].hotel?.hotelId === h.hotelId) n++
-    out.set(days[i].day, n > 1 ? `连住 ${n} 晚` : '')
+    out.set(days[i].day, { label: n > 1 ? `连住 ${n} 晚` : '', first: true })
     i += n
   }
   return out

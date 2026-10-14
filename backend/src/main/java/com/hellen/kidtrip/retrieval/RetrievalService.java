@@ -151,11 +151,11 @@ public class RetrievalService {
         if (req.needHotel() && check.hotels().isEmpty()) {
             run.warnings.add("没有查到可用的酒店");
         }
-        // 哨兵：万一星级筛**失效了**（上游改了行为、参数被忽略），结果里会重新冒出一堆"经济型"。
+        // 哨兵：万一档次筛**失效了**（上游改了行为、参数被忽略），结果里会重新冒出一堆"经济型"。
         // 这种"静默走偏"最难发现 —— 价格照样有、名字照样有、行程照样排得出来，只是排出来的是青旅。
         // 只在"我们确实带了筛"时才看：用户自己把筛关掉的，就别拿这条去烦他。
         // （空池由 warnIfBudgetHeavy 自己挡住，这里不重复判 —— 判两次早晚会有一处忘了改。）
-        if (req.needHotel() && hotelStars() != null) {
+        if (req.needHotel() && !hotelStarTiers().isEmpty()) {
             warnIfBudgetHeavy(check.hotels(), run);
         }
         if (!missingAfter.isEmpty()) {
@@ -208,9 +208,10 @@ public class RetrievalService {
     /**
      * 搜酒店的参数。
      *
-     * `hotelStars` 由调用方决定传不传（见 {@link #hotelStars()}）——
-     * 这里不自己去读配置，是为了让"带筛"和"不带筛"两条路径在输出上**看起来就是两个不同的查询**，
-     * 溯源面板里能一眼看出这次到底放宽了没有。
+     * 这里收到的是**单个档位**（如 "3" 或 "4,5"），由调用方 {@link #fetchHotels} 从
+     * {@link #hotelStarTiers()} 里逐个取出 —— 这个方法不自己去读配置，
+     * 是为了让"这一档"和"不带筛"两条路径在输出上**看起来就是两个不同的查询**，
+     * 溯源面板里能一眼看出这次到底查了哪几档、有没有放宽。
      */
     private static List<String> hotelArgs(RetrievalRequest req, String hotelStars) {
         List<String> args = new ArrayList<>(List.of("search-hotel", "--dest-name", req.city()));
@@ -233,10 +234,43 @@ public class RetrievalService {
         return args;
     }
 
-    /** 要发给上游的星级筛；null = 不筛。把"配置里的空串"翻译成"这里传 null"，只在这一处做。 */
-    private String hotelStars() {
-        String s = props.hotelStars();
-        return s == null || s.isBlank() ? null : s;
+    /**
+     * 要发给上游的**各个档位**；空列表 = 不筛。把配置里的空串翻译成"不筛"，只在这一处做。
+     *
+     * ⚠️ 返回的是 List 而不是单值，因为上游的 `--hotel-stars` **一次只回一档**：
+     *   实测（上海，2026-11-17）传 "3,4"、"2,3"、"3,4,5" 回来都是清一色"舒适型"，
+     *   传 "4" 回"四星级/高档型"，传 "4,5" 回"豪华型" —— 多值**不是并集**。
+     *   想同时拿到两个档位，只能查两次。所以配置里用分号分开（见 FlyaiProperties.hotelStars）。
+     *
+     * 分号的取舍：逗号是**上游自己的语法**（星级列表），不能动；
+     * 我们需要的"多查一次"是**另一个维度**的事，所以用另一个分隔符，两者不会互相污染。
+     * 顺带的好处是 `"4,5"` 这种老写法依然原样可用，读起来也还是"一次查询"。
+     */
+    private List<String> hotelStarTiers() {
+        return parseHotelStarTiers(props.hotelStars());
+    }
+
+    /**
+     * 分档解析本身（不含配置读取）—— 抽成 static 纯函数只为了能被单测直接钉住。
+     *
+     * 为什么值得一个独立函数：这里有一条**会静默出错**的规则 ——
+     *   `"3;;4"` / `"3;"` 这种写法必须把空档位丢掉，而不是发一次"空参数"的查询。
+     * 发出去的话，上游照样返回 10 条（等于没筛），于是青旅又混进来了，
+     * 而界面上、日志里都看不出"我们其实少发了一个筛" —— 用户只会觉得
+     * "怎么又有青旅"。这类"参数看起来对、语义已经不对"的问题，只能靠测试拦。
+     */
+    static List<String> parseHotelStarTiers(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        List<String> tiers = new ArrayList<>();
+        for (String part : raw.split(";")) {
+            String t = part.strip();
+            if (!t.isEmpty()) {
+                tiers.add(t);
+            }
+        }
+        return tiers;
     }
 
     /* ============================================================
@@ -253,7 +287,18 @@ public class RetrievalService {
     }
 
     /**
-     * 采酒店：带星级筛，但**筛空了要能退回去**。
+     * 采酒店：**每个档位查一次**，并且筛空了要能退回去。
+     *
+     * ── 为什么是循环而不是一次带多个星级（2026-10-14）────────────────
+     *   上游的 `--hotel-stars` 一次只回一档，多值不是并集（实测见 {@link #hotelStarTiers}）。
+     *   而我们确实需要两个档位：用户既要知道"舒适档有哪些"，也要知道"多花点能住到什么"。
+     *   所以只能查两次 —— 这是**上游行为逼出来的成本**，不是随手多花一次额度。
+     *   实测单次 search-hotel 约 2.5 秒；真付不起时下面会跳过并如实记账，而不是静默少查一档。
+     *
+     * ⚠️ 退避条件从"这一档筛空了"变成"**所有档都没查到**"。
+     *    这是多档带来的语义变化，很容易写错成查一档就判一次 ——
+     *    那样第一个档位空（小城市很常见）就会立刻去掉筛选重查，
+     *    而第二档其实还有货，结果是白花一次、还拿到一批可能带青旅的酒店。
      *
      * 星级筛是我们替用户加的一层"品味"（带娃住得像样点），它有一个必然的坏情况：
      * 小城市 / 特殊日期可能一家高档酒店都没有。那时上游返回 0 条 ——
@@ -266,10 +311,25 @@ public class RetrievalService {
      * 换的是参数，拿回来的必然是不同的集合，不存在白等。
      */
     private void fetchHotels(RetrievalRequest req, Run run, Deadline deadline) {
-        String stars = hotelStars();
-        collectHotels(hotelArgs(req, stars), run, deadline);
-        if (stars != null && run.hotels.isEmpty() && !deadline.expired()) {
-            run.warnings.add("按 " + stars + " 星筛选没有找到酒店，已放宽筛选条件重新查找");
+        List<String> tiers = hotelStarTiers();
+        if (tiers.isEmpty()) {
+            // 配置里显式写了空串 = 用户想看不筛的结果。一次查询，不带参数。
+            collectHotels(hotelArgs(req, null), run, deadline);
+            return;
+        }
+        for (int i = 0; i < tiers.size(); i++) {
+            // 第一档无论如何都查（否则"多档"可能变成"一档都没查"）。
+            // 从第二档起才看预算 —— 这是"宁可少一个档位，也不要整轮超时"的取舍，
+            // 而且它会留下 warning，不会静默。
+            if (i > 0 && deadline.expired()) {
+                run.warnings.add("时间预算用完了，酒店还有 "
+                        + (tiers.size() - i) + " 个档次没来得及查");
+                break;
+            }
+            collectHotels(hotelArgs(req, tiers.get(i)), run, deadline);
+        }
+        if (run.hotels.isEmpty() && !deadline.expired()) {
+            run.warnings.add("按 " + String.join("、", tiers) + " 档筛选没有找到酒店，已放宽筛选条件重新查找");
             collectHotels(hotelArgs(req, null), run, deadline);
         }
     }

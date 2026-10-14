@@ -179,6 +179,58 @@ try {
     '⭐ 顺序是"主选 → 备选 → 住宿"（备选紧跟主选，不越过住宿那条线）',
     `🚄@${iTrain} 备选@${iAlt} 🏨@${iHotel}`)
 
+  /* ── ②d ⭐ 今晚还能住哪儿（酒店备选）────────────────────────── */
+  // 这一层是 2026-10-14 加的，在此之前它**完全不在屏幕上**：
+  // 后端一次查回 10 家、模型只挑 1 家，剩下 9 家连"存在过"都不显示。
+  // 机票那边有同样的毛病（所以有了 ②c），住宿这边更难察觉 ——
+  // 用户不觉得"只给一家"是个问题，只会觉得"这家有点贵"。
+  console.log('')
+  console.log('【住宿备选】落选的几家有没有摆出来')
+
+  check(day1.includes('也可以住'),
+    '⭐ 第 1 天出现了「也可以住」这一行',
+    day1.slice(0, 260))
+  check(day1.includes('易佰酒店示例店') && day1.includes('如家旗下示例店') && day1.includes('和颐示例店'),
+    '三家备选的名字都画出来了（不能只画一个"还有 3 家"）',
+    day1.slice(day1.indexOf('也可以住'), day1.indexOf('也可以住') + 200))
+  check(day1.includes('¥143') && day1.includes('¥158') && day1.includes('¥283'),
+    '⭐ 价格画出来了（用户看这一行就是为了找"原来还有更便宜的"）',
+    '假数据那三个价格取的是实测真值：易佰 ¥143 / 如家 ¥158 / 和颐 ¥283')
+  check(day1.includes('舒适型') && day1.includes('高档型'),
+    '⭐ 跨档：舒适档和高档都出现了（全挤在一个档的话，后端多的那次查询就白花了）',
+    '备选全是一个档次 = 第二次查询纯浪费，而且没有任何信号')
+
+  // ⭐ 连住只渲染一次。假数据里三天都是同一家酒店、**每天带同一份备选**
+  //    （和后端行为一致，见 attachHotelAlternatives），"哪几天算连住"是前端 mergeStays 算的。
+  //    这条断言盯的就是那个去重：少写一个 first 判断，同一个清单会在屏幕上出现三遍，
+  //    而且不会有任何报错 —— 用户只会觉得"可选的真多"。
+  const altRowCount = cards.reduce((n, c) => n + (c.text.match(/也可以住/g)?.length ?? 0), 0)
+  check(altRowCount === 3,
+    '⭐ 整个页面只画了 3 行备选（连住时后端三天带的是同一份，去重靠前端）',
+    `全页出现 ${altRowCount} 次「也可以住」`)
+  check(!lastDay.includes('也可以住'),
+    '⭐ 连住的第 2、3 天不重复画（画三遍用户会以为有 9 家备选）',
+    lastDay.slice(0, 200))
+
+  // ── 订房链接 ────────────────────────────────────────────────────
+  // 这一条同时钉住另一个洞：**主选酒店以前压根没有链接**。
+  // 交通行一直有"去飞猪看这趟车"，住宿那一行却一个字都没有 ——
+  // 也就是说整份行程里唯一能把用户直接带到酒店的那条路，一直是断的。
+  const bookLinks = await page.$$eval('a', (as) =>
+    as.filter((a) => a.textContent.includes('去飞猪订')).map((a) => a.getAttribute('href') ?? ''))
+  check(bookLinks.length >= 4,
+    '⭐ 主选 + 3 家备选都有「去飞猪订」（能直接下单的入口，不是装饰）',
+    `实际 ${bookLinks.length} 条：${bookLinks.slice(0, 3).join(' | ')}`)
+  check(bookLinks.length > 0 && bookLinks.every((h) => h.includes('example.invalid')),
+    '⭐ 那些链接全部指向 `.invalid` 占位域名（假数据绝不编一个像真的飞猪链接）',
+    bookLinks.join(' | '))
+
+  const iHotelRow = day1.indexOf('🏨')
+  const iAltRow = day1.indexOf('也可以住')
+  check(iHotelRow >= 0 && iAltRow > iHotelRow,
+    '⭐ 顺序是"主选酒店 → 备选"（备选紧跟它回答的那个问题，不飘到别处）',
+    `🏨@${iHotelRow} 备选@${iAltRow}`)
+
   /* ── ②b ⭐ 「换一个」在降级路上也得能用 ─────────────────────── */
   // 理由和第 ② 条同源：这份假数据存在的意义是"出事那天顶上去"，
   // 那么出事那天顶上去的东西**必须包含最重要的功能**。

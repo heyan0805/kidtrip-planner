@@ -158,6 +158,33 @@ try {
     check(iTransfer >= 0 && iStay >= 0 && iTransfer < iStay,
       '⭐ 交通行排在住宿行**前面**（"怎么到的"发生在"今晚住哪"之前）',
       `🚄@${iTransfer} vs 住宿@${iStay}`)
+
+    /* ── 住宿：主选 + 备选（2026-10-14 加）─────────────────────────
+     * 这几条对着**真后端**验，因为它们是"池子里真的有多家酒店"这件事的落点。
+     * 假数据那条链（verify-mock-ui）能证明"渲染分支是通的"，但证明不了
+     * "后端真的把落选的那几家带出来了" —— 两边缺一不可。
+     *
+     * ⚠️ 这里**不验**"备选只画一次"：那取决于模型这回挑了几家酒店、是不是连住，
+     *    是这个数据的属性，不是这一层的规矩。去重在 verify-mock-ui 里验
+     *    （那份假数据三天同一家，是"连住"最干净的样子）。 */
+    if (day1.text.includes('🏨')) {
+      check(day1.text.includes('也可以住'),
+        '⭐ 第 1 天摆出了备选酒店（在这之前用户每天只看到一家，还不知道那是从 10 家里挑的）',
+        day1.text.slice(day1.text.indexOf('🏨'), day1.text.indexOf('🏨') + 280))
+      check(day1.text.includes('去飞猪订'),
+        '⭐ 住宿行有「去飞猪订」（后端一直在发 bookUrl，前端在这之前一个字都没渲染）',
+        day1.text.slice(day1.text.indexOf('🏨'), day1.text.indexOf('🏨') + 200))
+
+      // 顺序：主选 → 备选。备选和主选回答的是同一个问题（今晚住哪），必须紧挨着。
+      const iHotelRow = day1.text.indexOf('🏨')
+      const iAltRow = day1.text.indexOf('也可以住')
+      check(iAltRow > iHotelRow,
+        '⭐ 顺序是"主选酒店 → 备选"（备选紧跟它回答的那个问题）',
+        `🏨@${iHotelRow} 备选@${iAltRow}`)
+    } else {
+      check(false, '⚠️ 第 1 天没有酒店行 —— 这几条断言没有地基（检查这次是不是 needHotel=false）',
+        day1.text.slice(0, 200))
+    }
   }
 
   /* ── 最后一天：回程 ─────────────────────────────────────────── */
