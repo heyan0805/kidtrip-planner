@@ -117,6 +117,33 @@ public class LegService {
      */
     private static final LocalTime RETURN_ARRIVE_BY = LocalTime.of(20, 0);
 
+    /**
+     * 发到上游的时长粗筛窗口的**下界**（小时）。
+     *
+     * ── 它为什么不能跟着 maxLegMinutes 走 ─────────────────────────
+     *   这个参数原来就是 `hoursCeiling(maxLegMinutes)`（180 分钟 → 3 小时），
+     *   意图是"让上游粗筛、红线在本地判"。它有一个致命副作用：
+     *   **当一段路最快的班次也超过窗口时，上游会返回
+     *   `{"status":1,"message":"行程时长过滤结果为空"}` —— 于是我们连"最快的那班"
+     *   都拿不到，整条路线被静默拿掉。**
+     *
+     *   实测（2026-11-17，深圳 → 上海 9 天行程）：`--total-duration-hour 3` 返回空，
+     *   用户拿到的行程里**一行交通信息都没有**，而 warnings 写着
+     *   "深圳 到 上海 在 180 分钟内没有直达车次" —— 听起来是一个很确定的结论，
+     *   而深圳 → 上海的高铁是存在的（约 6.5 小时）。**这就是一句假话，
+     *   而且用户会因此放弃这趟行程。**
+     *
+     *   所以窗口必须宽到"能拿到最快的那班"，红线才真正落在本地那条
+     *   `minutes <= maxLegMinutes()` 上。12 小时覆盖国内所有主要城市对：
+     *   深圳 → 上海 7h、广州 → 北京 8h、上海 → 成都 11h。
+     *
+     * ── 拿到超限的班次之后怎么办 ──────────────────────────────────
+     *   **给它，并且明说超限**（见 {@link Leg#overLimit}）。这和 {@link #pick} 里
+     *   "一条都不满足时段就退回第一条"是同一条原则：
+     *   给一份真实但不理想的结果，永远好过给一句干脆的错话。
+     */
+    static final int MIN_SEARCH_WINDOW_HOURS = 12;
+
     /** 契约里的日期时间格式：ISO 到分钟。秒是上游的噪声，不要带出去 */
     private static final DateTimeFormatter ISO_MINUTES = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm");
 
@@ -148,11 +175,25 @@ public class LegService {
     }
 
     /**
-     * @param transfer 只有 FOUND 时非 null
-     * @param query    真实发出去的那条命令 —— 排障时最常见的误判是"我以为我查的是 A"
-     * @param detail   失败或"没走法"时的一句话，给日志和 warnings 用
+     * @param transfer  只有 FOUND 时非 null
+     * @param query     真实发出去的那条命令 —— 排障时最常见的误判是"我以为我查的是 A"
+     * @param detail    失败或"没走法"时的一句话，给日志和 warnings 用
+     * @param overLimit **这趟车是真的，但它超过了 maxLegMinutes。** 只在 FOUND 时可能为 true。
+     *
+     *   ── 为什么它不是一个 Outcome（而是一个附加标记）──────────────
+     *     "有车但太长"和"没有这种走法"必须是两个不同的结论，因为调用方要说
+     *     完全不同的话：前者是"给你留了最快的一班，但它要 X 小时"，
+     *     后者才是"这段路没有走法，换个目的地吧"。
+     *
+     *     混成一个的后果实测过（2026-11-17，深圳 → 上海 9 天）：上游按粗筛窗口
+     *     返回"结果为空"，我们把整条路线判成"没有走法"，用户拿到一份
+     *     **一行交通都没有**的行程，warnings 还写着"在 180 分钟内没有直达车次" ——
+     *     而高铁其实存在，约 6.5 小时。**一句听起来很确定的假话，比什么都不说更伤人。**
+     *
+     *   ⚠️ 但它**不能**直接变成 Outcome.NO_EDGE —— 那会让 `transfer` 变成 null，
+     *      用户就又看不到那趟车了。真相是"有车"，就该把车给他。
      */
-    public record Leg(Outcome outcome, Transfer transfer, String query, String detail) {
+    public record Leg(Outcome outcome, Transfer transfer, String query, String detail, boolean overLimit) {
     }
 
     private final FlyaiCaller caller;
@@ -179,7 +220,7 @@ public class LegService {
                     "出发地和目的地是同一座城市（" + origin + "）—— 同城不需要城际交通，调用方应该先判掉");
         }
 
-        List<String> args = args(origin, destination, date);
+        List<String> args = args(origin, destination, date, searchWindowHours());
         String query = "flyai " + String.join(" ", args);
 
         CandidateNormalizer.Normalized<FlyaiTrain> normalized;
@@ -188,13 +229,14 @@ public class LegService {
             normalized = normalizer.trains(raw);
         } catch (FlyaiException e) {
             if (e.reason() == FlyaiException.Reason.NO_RESULT) {
-                // 上游的"没有这种走法"——这是**结论**，不是失败
-                log.info("{} → {} 在 {} 分钟内没有直达车次（上游明确回答）", origin, destination, maxLegMinutes());
-                return new Leg(Outcome.NO_EDGE, null, query,
-                        origin + " 到 " + destination + " 在 " + maxLegMinutes() + " 分钟内没有直达车次");
+                // 上游的"这个时长内没有走法"——这是**结论**，不是失败。
+                // ⚠️ 说"没有走法"时必须带上**真正查过的窗口**（现在是 searchWindowHours，
+                //    不再是 maxLegMinutes）：否则用户会以为我们只查了 3 小时就下结论。
+                return noEdge(origin, destination, query,
+                        "在 " + searchWindowHours() + " 小时内没有查到直达走法");
             }
             log.warn("{} → {} 的车次查询失败（{}）：{}", origin, destination, e.reason(), e.getMessage());
-            return new Leg(Outcome.UPSTREAM_ERROR, null, query, e.getMessage());
+            return new Leg(Outcome.UPSTREAM_ERROR, null, query, e.getMessage(), false);
         }
 
         List<FlyaiTrain> within = new ArrayList<>();
@@ -205,13 +247,13 @@ public class LegService {
             }
         }
         if (within.isEmpty()) {
-            // 两种情况要分开说，因为"这个时长内没有"是一句断言，而"一条都没查到"是另一句。
-            // 混成一句的话，当地址/班次真的不存在时，我们会说成"有车但都太慢"——一个我们并不知道的事实。
-            String detail = normalized.items().isEmpty()
-                    ? origin + " 到 " + destination + " 没有查到任何车次"
-                    : origin + " 到 " + destination + " 查到的车次时长都超过 " + maxLegMinutes() + " 分钟";
-            log.info("{} → {}：{}", origin, destination, detail);
-            return new Leg(Outcome.NO_EDGE, null, query, detail);
+            // ⭐ 两种情形**天差地别**，绝不能混成一句：
+            //   ① 一条都没查到        → 真的没有这条路线；
+            //   ② 有候选、但最快的也超上限 → **有车，只是太长**。
+            //   把 ② 说成"没有走法"（这是加 MIN_SEARCH_WINDOW_HOURS 之前的行为）会让用户
+            //   永远放弃一条其实存在的路线，而且全程不报任何错。
+            return overLimitOrNone(origin, destination, query, searchWindowHours(), maxLegMinutes(),
+                    normalized.items(), direction);
         }
 
         FlyaiTrain chosen = pick(within, direction);
@@ -220,15 +262,58 @@ public class LegService {
                 origin, destination, direction, transfer.trainNo(),
                 transfer.depStation(), transfer.arrStation(),
                 transfer.durationMinutes(), transfer.priceYuan());
-        return new Leg(Outcome.FOUND, transfer, query, null);
+        return new Leg(Outcome.FOUND, transfer, query, null, false);
+    }
+
+    /**
+     * 上限之内一班都没有时，把这件事分成两个**不同**的结论。
+     *
+     * ①② 为什么要分开，见调用点。这里只说 ② 为什么是"给车"而不是"给一句更强的警告"：
+     *   用户的真实约束是"带娃别太累"，不是"绝对不能超过 N 分钟"。
+     *   给他一班真实的、最快的车（外加一句"它超了上限"），他就有了做决定所需的全部信息；
+     *   只给一句"没有直达"，他拿到的是一个**假的选择集**。
+     *
+     * 参数化 windowHours / limitMinutes 只是为了能被单测直接钉住 —— 不碰网络、
+     * 不碰配置，给得进候选就出得来结论。
+     */
+    static Leg overLimitOrNone(String origin, String destination, String query,
+                               long windowHours, int limitMinutes,
+                               List<FlyaiTrain> items, Direction direction) {
+        if (items.isEmpty()) {
+            return noEdge(origin, destination, query, windowHours + " 小时内没有查到直达走法");
+        }
+        FlyaiTrain fastest = pick(items, direction);
+        Transfer transfer = toTransfer(fastest, origin, destination);
+        if (transfer == null) {
+            // 上游偶尔会回 journeys 为空的脏数据（见 toTransfer）。这时**不能**假装有车 ——
+            // 一个字段全空的 Transfer 比"没查到"更糟：它会在界面上画出一行看起来正常的交通。
+            return noEdge(origin, destination, query, "查到的车次数据不完整，没能取到可用的一班");
+        }
+        log.info("{} → {} {}：最快的一班也超过上限（{} > {} 分钟），仍然给出 {}",
+                origin, destination, direction, transfer.durationMinutes(), limitMinutes,
+                transfer.trainNo());
+        return new Leg(Outcome.FOUND, transfer, query, null, true);
+    }
+
+    private static Leg noEdge(String origin, String destination, String query, String reason) {
+        String detail = origin + " 到 " + destination + " " + reason;
+        log.info("{}", detail);
+        return new Leg(Outcome.NO_EDGE, null, query, detail, false);
     }
 
     /* ============================================================
      * 查询条件与挑选 —— 全是纯函数，单独抽出来就是为了能测
      * ============================================================ */
 
-    /** 见类注释 ①：这个参数按**单段**筛，正是我们要的语义。 */
-    private List<String> args(String origin, String destination, String date) {
+    /**
+     * 见类注释 ①：`--total-duration-hour` 按**单段**筛，正是我们要的语义。
+     *
+     * ⚠️ 传进来的 {@code windowHours} 是**粗筛窗口**，不是那条上限（见
+     *    {@link #MIN_SEARCH_WINDOW_HOURS}）。两者故意不是同一个数：
+     *    窗口要是等于上限，一段"最快班次也超上限"的路会连候选都拿不到，
+     *    于是我们只能对用户说"没有这种走法" —— 一句听起来很确定的假话。
+     */
+    static List<String> args(String origin, String destination, String date, long windowHours) {
         List<String> args = new ArrayList<>(List.of(
                 "search-train", "--origin", origin, "--destination", destination));
         if (date != null && !date.isBlank()) {
@@ -236,7 +321,7 @@ public class LegService {
             args.add(date);
         }
         args.add("--total-duration-hour");
-        args.add(String.valueOf(hoursCeiling(maxLegMinutes())));
+        args.add(String.valueOf(windowHours));
         // 时长升序（实测有效）。挑"上午出发"那件事不在上游做 —— 见 pick 的注释：
         // 上游没有时段筛选这项能力，而我们拿回来的结果里本来就带着时刻。
         args.add("--sort-type");
@@ -245,24 +330,47 @@ public class LegService {
     }
 
     /**
-     * 把分钟上限换算成上游要的**小时**。
+     * 把分钟上限换算成上游要的**小时**（向上取整）。
      *
-     * 上游这个参数是小时（整数），所以 150 分钟只能表达成 3 小时（=180 分钟）——
-     * 比配置**更松**。这不是妥协，是有意的：上游这层只当粗筛，用来快速拿到"有没有走法"这个结论，
-     * 真正的红线在 `search` 里那条 `minutes <= maxLegMinutes()` 上。
-     * 把红线放在本地的好处是它**可测、可读、且不依赖上游对参数的理解**。
+     * 上游这个参数是整数小时，所以 150 分钟只能表达成 3 小时（=180 分钟）。
+     * 取整方向**必须向上**：向下取整会把红线收紧成 150 → 2 小时 = 120 分钟，
+     * 那就是"配置说 150、实际只放 120"—— 一个不报错的谎。
+     * 包级静态是为了能被单测钉住：这个方向的取整错了，用户不会看到任何报错，
+     * 只会发现"我配了 150，可 130 分钟的车次总是查不到"。
      *
-     * ⚠️ 向下取整会把红线**收紧**到比配置更严（150 → 2 小时 = 120 分钟），
-     *    那就是"配置说 150、实际只放 120"——一个不报错的谎。所以必须向上取整。
-     *    包级静态是为了能被单测钉住：这个方向的取整错了，用户不会看到任何报错，
-     *    只会发现"我配了 150，可 130 分钟的车次总是查不到"。
+     * ⚠️ 它**不再直接决定发出去的参数**（那是 {@link #searchWindowHours}），
+     *    只作为那个窗口的下界之一。理由见 {@link #MIN_SEARCH_WINDOW_HOURS}。
      */
     static long hoursCeiling(int maxLegMinutes) {
         return Math.max(1, (long) Math.ceil(maxLegMinutes / 60.0));
     }
 
+    /**
+     * 发到上游的时长粗筛窗口（小时）= max(配置换算出的小时, {@link #MIN_SEARCH_WINDOW_HOURS})。
+     *
+     * 取 max 而不是直接写死 12：用户要是把 maxLegMinutes 调到 20 小时，
+     * 我们应该真的去查 20 小时，而不是被那个常量卡住。
+     */
+    static long searchWindowHours(int maxLegMinutes) {
+        return Math.max(hoursCeiling(maxLegMinutes), MIN_SEARCH_WINDOW_HOURS);
+    }
+
+    private long searchWindowHours() {
+        return searchWindowHours(maxLegMinutes());
+    }
+
     private int maxLegMinutes() {
         return props.maxLegMinutes();
+    }
+
+    /**
+     * 本层当前生效的单段时长上限（分钟）。
+     *
+     * 给调用方写"这趟车超了上限"那条警告用的 —— 那个数字在配置里，
+     * 而"超了多少"只有拿它和 Transfer.durationMinutes 比才说得出来。
+     */
+    public int limitMinutes() {
+        return maxLegMinutes();
     }
 
     /**
@@ -301,16 +409,34 @@ public class LegService {
      * 时刻读不出来 → false（不参与时段判断），但**不因此排除整批** ——
      * 调用方的 for 会继续往后找，一条都找不到才走退回第一条那条路。
      */
-    private static boolean acceptable(FlyaiTrain train, Direction direction) {
-        LocalTime dep = departureTime(train);
-        if (dep == null) {
+    static boolean acceptable(FlyaiTrain train, Direction direction) {
+        LocalDateTime depAt = departureAt(train);
+        if (depAt == null) {
             return false;
         }
+        LocalTime dep = depAt.toLocalTime();
         if (direction == Direction.OUTBOUND) {
             return !dep.isBefore(OUTBOUND_EARLIEST) && !dep.isAfter(OUTBOUND_LATEST);
         }
-        LocalTime arr = arrivalTime(train);
-        return arr != null && !dep.isBefore(RETURN_EARLIEST) && !arr.isAfter(RETURN_ARRIVE_BY);
+
+        LocalDateTime arrAt = arrivalAt(train);
+        if (arrAt == null) {
+            return false;
+        }
+        // ⭐ 跨午夜的到达**一律不合格** —— 这一条必须比**日期**，不能只比时刻。
+        //
+        //    实测（2026-11-17，上海 → 深圳回程，12 小时窗口）：候选里那趟 20:15 发的过夜车
+        //    次日 07:03 到。只看时刻的话，它"早上 7 点到家"——完美落在 RETURN_ARRIVE_BY 之内，
+        //    于是这趟 **10 小时 48 分的夜车被判成"最合适的回程"**，而带娃坐一夜的代价
+        //    它一个字都不会提。
+        //
+        //    这是这个工程反复出现的那类错的又一个实例：**规则对，取值方式错。**
+        //    （`Transfer.arrDateTime` 早就带上了日期，正是为了这个 ——
+        //      但 `pick` 这条路上没人用它，只看了一个 LocalTime。）
+        if (arrAt.toLocalDate().isAfter(depAt.toLocalDate())) {
+            return false;
+        }
+        return !dep.isBefore(RETURN_EARLIEST) && !arrAt.toLocalTime().isAfter(RETURN_ARRIVE_BY);
     }
 
     /**
@@ -385,16 +511,21 @@ public class LegService {
         return parsed == null ? null : parsed.format(ISO_MINUTES);
     }
 
-    static LocalTime departureTime(FlyaiTrain train) {
+    /**
+     * 发车时刻 —— **带日期**，不是裸的 LocalTime。
+     *
+     * 为什么必须带日期：这一层要判"有没有跨午夜"，而跨午夜这件事**只比时刻是看不出来的**
+     * （次日 07:03 和当天 07:03 的 LocalTime 完全相等）。见 {@link #acceptable} 里那段实测。
+     */
+    static LocalDateTime departureAt(FlyaiTrain train) {
         FlyaiTrain.Segment segment = firstSegment(train);
-        LocalDateTime dt = segment == null ? null : parseDateTime(segment.depDateTime());
-        return dt == null ? null : dt.toLocalTime();
+        return segment == null ? null : parseDateTime(segment.depDateTime());
     }
 
-    static LocalTime arrivalTime(FlyaiTrain train) {
+    /** 到达时刻 —— 同理带日期，且取**最后一段**的（中转时前一段的到达站只是换乘站） */
+    static LocalDateTime arrivalAt(FlyaiTrain train) {
         FlyaiTrain.Segment segment = lastSegment(train);
-        LocalDateTime dt = segment == null ? null : parseDateTime(segment.arrDateTime());
-        return dt == null ? null : dt.toLocalTime();
+        return segment == null ? null : parseDateTime(segment.arrDateTime());
     }
 
     private static FlyaiTrain.Segment firstSegment(FlyaiTrain train) {

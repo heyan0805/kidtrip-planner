@@ -36,7 +36,9 @@ page.on('console', (m) => {
 async function readProfile() {
   const rows = await page.$$eval('aside dl > div', (els) =>
     els.map((e) => [
-      e.querySelector('dt')?.textContent?.trim() ?? '',
+      // 标签后面可能跟一个必填标记（`出发地*`）—— 去掉它，否则这张表的 key 会随界面一起变。
+      // 这不是"宽容"，是把两件事分开：界面怎么标必填会变（星号/颜色/图标），字段名是契约。
+      (e.querySelector('dt')?.textContent?.trim() ?? '').replace(/\*+$/, ''),
       e.querySelector('dd')?.textContent?.trim() ?? '',
     ]),
   )

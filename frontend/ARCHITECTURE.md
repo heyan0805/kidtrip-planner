@@ -130,7 +130,7 @@ export default App
 |---|---|---|
 | `index.tsx:144` | `chat.plan` 从 `null` 变成一个对象 | 行程区块整体出现 |
 | `index.tsx:53` | `chat.mockNotice` 非空 | 顶部黄色"正在用假数据"横幅出现 |
-| `index.tsx:133` | `chat.canGenerate` 为假 | "生成行程"按钮禁用 + 灰色说明文字 |
+| `index.tsx:142` | `chat.canGenerate` 为假（= `missingFields` 非空） | "生成行程"按钮禁用 + 列出还差哪几项 |
 | `index.tsx:479` | `SpotRow` 内的 `open` state | 该点的「换一个」备选清单展开/收起 |
 
 这四件事里有三个是"**同一页内某块内容的有无**"，第四个（`open`）是纯界面状态。
@@ -194,9 +194,19 @@ grep -iE "redux|zustand|jotai|recoil|mobx|react-query|swr" package.json   # → 
 | `inFlight` | `useRef<boolean>` | **并发闸门**（见 3.4②） |
 | `abortRef` | `useRef<AbortController>` | 卸载/重置时取消在飞的请求 |
 
-对外返回 8 个状态 + 1 个派生值（`canGenerate = Boolean(params.city?.trim())`）+ 5 个方法
-（`sendRound` / `generate` / `swapSpot` / `restoreSpot` / `reset`），共 14 个键 ——
+对外返回 9 个状态 + 2 个派生值（`canGenerate` / `missingFields`）+ 5 个方法
+（`sendRound` / `generate` / `swapSpot` / `restoreSpot` / `reset`），共 16 个键 ——
 和 `UsePlanChat` 接口声明逐一对得上。
+
+⚠️ `canGenerate` 的判据是 `REQUIRED_FIELDS`（五项：出发地 / 目的地 / 天数 / 出发日期 / 孩子年龄），
+**不是"知道城市就行"**。它原来写的是 `Boolean(params.city?.trim())`，
+后果是"天数 / 出发日期 / 孩子年龄"还显示「待确认」的时候就能点，
+而后端 `orDefaults()` 会把 days 静默补成 3 —— 用户说 9 天，出来一份 3 天的行程。
+**默认值是对的兜底，但它绝不能被当成"用户已经说过了"。**
+
+`REQUIRED_FIELDS` 从 hook 里导出，画像卡那边也用它标"哪个格子必须填"。
+两处共用一个判据来源：分开写一定会漂移，而漂移的症状是"按钮亮着、界面上却有个必填格子还空着"，
+两个地方都不报错，只是互相矛盾。
 
 **为什么 `messages` 和 `params` 必须是两份状态、不能合成一份**：
 用户聊了 20 轮之后，早期那句话可能已经被后端从历史里裁掉了，
@@ -313,7 +323,7 @@ const days = applySwaps(plan.days, swaps)   // 渲染时才叠加
 
 #### `DEFAULT_TIMEOUT_MS = 180_000` —— 这个数字是算出来的
 
-`/generate` 正常 25~60 秒（检索 2~10s + 规划检索条件 10~20s + 排行程 10~30s）。
+`/generate` 正常 25~60 秒（查车次 + 规划检索条件 10~20s + 检索 2~10s + 排行程 10~30s）。
 2026-10-13 从 120 秒提到 180 秒，因为一次生成又多了**两段城际车次查询**：
 单次 CLI 1.3~2.7 秒，但中间要留调用间隔，被限流时退避 15 秒 —— 最坏两段能到 40 秒。
 **这个数字跟着后端预算走，后端改了这里要跟着改。**
@@ -330,15 +340,30 @@ const days = applySwaps(plan.days, swaps)   // 渲染时才叠加
 `subscribeMockNotice()` 就是这条通道 —— hook 订阅它、界面把它渲染成顶部黄色横幅。
 **任何"悄悄地换了数据源"的行为，都必须留下痕迹。**
 
-### 4.3 `api/plan.ts` —— 两个接口
+### 4.3 `api/plan.ts` —— 三个接口
 
 ```ts
-chatPlan(req, signal)      // POST /plan/chat      超时 30 秒（只调一次模型）
-generatePlan(req, signal)  // POST /plan/generate  用默认 180 秒
+chatPlan(req, signal)                 // POST /plan/chat              超时 30 秒（只调一次模型）
+generatePlan(req, signal, runId?)     // POST /plan/generate          用默认 180 秒
+fetchPlanProgress(runId, signal)      // GET  /plan/progress/{runId}  超时 5 秒，可能返回 null
 ```
 
 `generatePlan` 里**刻意不写超时**：写一个"看起来更合理"的 60 秒就会复现上面那个 bug。
 180 那个数字只在 `http.ts` 里声明一次。
+
+#### 进度接口：一个"旁路接口"，三处刻意和别的接口不一样
+
+| 选择 | 为什么 |
+|---|---|
+| **不传 `mock`** | `request()` 只在"`network` 失败 **且** 备了 mock"时才降级，不传就是不参与降级。进度是纯观测，问不到就安静算了 —— **一个观测动作不该改变用户对数据源的整体判断**（它要是能触发降级，界面顶上就会挂出一条「正在使用假数据」） |
+| **超时 5 秒**（默认 180） | 那个 180 是留给 `/generate` 那种重活的。进度是几十字节的查询，5 秒不回来说明这一次不值得等 —— 反正下一拍 1 秒后就到 |
+| **可能返回 `null`** | 后端查不到这个 runId（这趟已收场、或记录过了 5 分钟有效期）。**这不是错误**：轮询的最后一拍总落在生成结束之后，`null` 就是"这趟已经不在场上了"的信号，前端据此安心收工 |
+
+`runId` 走**请求头 `X-Run-Id`**，不进请求体 —— 进度不是这次生成的输入，只是"我想看它怎么跑"。
+塞进 body 就等于往那份被后端契约测试和前端类型两头钉着的 `PlanGenerateRequest` 里凭空加一个字段。
+
+**为什么是轮询，不是流式**：这条产品要跑在内网穿透上，而 **Cloudflare 免费隧道不支持 SSE** ——
+流式会在最要命的那一刻断掉。轮询在任何代理上都稳，代价只是进度最多晚 1 秒。
 
 **请求体的两条传递规矩**（都写在 `types/plan.ts` 的注释里）：
 
@@ -489,7 +514,7 @@ TravelPlan { summary, days[], warnings[], provenance, spotPool[] }
 | `types/flyai.ts` | 飞猪长什么样（第三方形状，运行时不参与） |
 | `types/plan.ts` | 我们的契约（前后端逐字一致，改一处要改两处） |
 | `api/http.ts` | 唯一出口：协议 + 超时 + 错误分类 + Mock 降级 |
-| `api/plan.ts` | 两个接口 + 它们各自的假数据 |
+| `api/plan.ts` | 三个接口（对话 / 生成 / 进度）+ 前两个各自的假数据 |
 | `hooks/usePlanChat.ts` | 前端全部业务状态；镜像 ref、并发闸门、稀疏覆盖都在这 |
 | `pages/TravelPlanner/index.tsx` | 唯一页面；5 个局部组件 + 8 个纯函数 |
 | `vite.config.ts` | dev server 和 `/api` 代理（唯一一处转发配置） |

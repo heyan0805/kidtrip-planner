@@ -70,16 +70,62 @@ public class PlanService {
     private final PlanComposer composer;
     private final RetrievalPlanner retrievalPlanner;
     private final LegService legService;
+    private final GenerationProgress progress;
 
     public PlanService(RetrievalService retrievalService, PlanComposer composer,
-                       RetrievalPlanner retrievalPlanner, LegService legService) {
+                       RetrievalPlanner retrievalPlanner, LegService legService,
+                       GenerationProgress progress) {
         this.retrievalService = retrievalService;
         this.composer = composer;
         this.retrievalPlanner = retrievalPlanner;
         this.legService = legService;
+        this.progress = progress;
     }
 
+    /**
+     * 不带进度登记的入口。
+     *
+     * 保留它不是为了兼容旧调用 —— 而是因为**"想看进度"必须是调用方主动要求的**。
+     * 脚本、单测、排障时直接调这个方法，不必为了跑通先造一个 runId。
+     */
     public TravelPlan generate(PlanGenerateRequest request) {
+        return generate(request, null);
+    }
+
+    /**
+     * 带进度登记的入口。
+     *
+     * 就三件事：登记开始 → 干活 → 记账。真正的编排在 {@link #doGenerate} 里，一个字没动。
+     *
+     * 为什么"记失败"放在这一层，而不是散在 doGenerate 的每个 throw 前面：
+     * 一趟生成能从很多地方失败（模型超时、上游异常、参数不合法……），
+     * 逐个 throw 去补一行 finish 是一次注定会漏的活 —— 今天补了五处，
+     * 明天新加第六条失败路径就又漏了，而漏掉的表现是"进度条永远停在那一步转圈"。
+     * 这里只有**一个出口**，漏不掉。**能用一个 try 兜住的账，不要用五处手写。**
+     */
+    public TravelPlan generate(PlanGenerateRequest request, String runId) {
+        progress.begin(runId);
+        try {
+            TravelPlan plan = doGenerate(request, runId);
+            progress.finish(runId, true);
+            return plan;
+        } catch (RuntimeException e) {
+            progress.finish(runId, false);
+            throw e;
+        }
+    }
+
+    /**
+     * 真正的编排流程。
+     *
+     * ⚠️ `runId` 在这一段里**只以 `progress.mark(runId, …)` 的形式出现**，
+     *    不参与任何一个判断、不进任何一份返回值、不影响任何一次上游调用。
+     *    这不是随手写成的，是硬约束：打点是**旁路**。
+     *    哪天有人让流程"根据进度做点什么"（比如"已经查得够久了，跳过补查吧"），
+     *    这条线就断了 —— 那时它不再是观测，而是会改变结果的东西，
+     *    而"进度显示的是真实发生的事"这句话也就跟着作废了。
+     */
+    private TravelPlan doGenerate(PlanGenerateRequest request, String runId) {
         long start = System.currentTimeMillis();
         List<String> warnings = new ArrayList<>();
 
@@ -100,6 +146,7 @@ public class PlanService {
         // 更不会多花钱：结果进缓存，演示当天这两条查询是命中的。
         //
         // ⚠️ 车次的告警单独收着，最后才并进 warnings —— 见下面 addAll 处的说明。
+        progress.mark(runId, GenerationProgress.Stage.LEGS);
         List<String> legQueries = new ArrayList<>();
         List<String> legWarnings = new ArrayList<>();
         Legs legs = searchLegs(params, legQueries, legWarnings);
@@ -109,6 +156,10 @@ public class PlanService {
         // 为什么放在这一步而不是 /chat 里：因为**它决定我们要发几次上游请求**，
         // 而"有几次成本"这个信息，只有准备去查的那一刻才完整（用户的画像可能刚改过）。
         // 决定权留在知道成本的一侧 —— 这和"wantedCategories 是期望不是命令"是同一条原则。
+        // ⚠️ 打点放在 if **之前**，而不是模型那个分支里面：
+        //    调用方显式给了检索条件时，这一步不调模型（瞬间完成），但它**仍然是一次真实的经过**。
+        //    放进 else 分支里的话，脚本调用（给了条件）的进度会永远缺掉这一格。
+        progress.mark(runId, GenerationProgress.Stage.PLAN_QUERIES);
         RetrievalPlan retrievalPlan;
         if (request.retrieval() != null) {
             // 调用方（脚本、排障、以后可能的前端）显式给了条件 —— 照用，不去问模型。
@@ -124,6 +175,7 @@ public class PlanService {
         }
 
         // ── 前三段：检索（内部含规范化、规则校验、补查与放宽）────────────
+        progress.mark(runId, GenerationProgress.Stage.SEARCH);
         RetrievalResult pool = retrievalService.retrieve(new RetrievalRequest(
                 params.city(),
                 params.startDate(),
@@ -174,6 +226,9 @@ public class PlanService {
         log.info("备选池：{} 条（其中 {} 条送进了 prompt）", spotPool.size(), Math.min(pois.size(), MAX_CANDIDATES_IN_PROMPT));
 
         // ── 第五、六段：让模型挑与排，然后回填事实 ──────────────────────
+        // 同样打在 if 之前：候选池为空时会跳过模型调用，那一步也就不再耗时，
+        // 但它依然"发生过"（我们确实走到了这里，并做出了不再问模型的决定）。
+        progress.mark(runId, GenerationProgress.Stage.COMPOSE);
         PlanAssembler.Assembled assembled;
         if (pois.isEmpty()) {
             // 池子空的时候**不调模型**。理由不只是省钱：
@@ -195,6 +250,7 @@ public class PlanService {
         // 查在排程之前（见上面的说明），挂在排程之后 —— 因为"挂到哪一天"这件事
         // 得等每天排出来才知道。两步分开，是因为它们依赖的东西不同：
         // 查只依赖画像，挂依赖装配后的天数。
+        progress.mark(runId, GenerationProgress.Stage.VALIDATE);
         List<TravelDay> days = attachLegs(assembled.days(), legs);
         warnLegConflicts(days, legs, legWarnings);
 
@@ -675,7 +731,14 @@ public class PlanService {
         queries.add(leg.query());
 
         return switch (leg.outcome()) {
-            case FOUND -> leg.transfer();
+            case FOUND -> {
+                // ⭐ **超限也要挂上。** "太长"是值得说的一句话，但绝不是"把车藏起来"的理由 ——
+                //    藏起来用户连"要坐多久"都看不到，就更谈不上自己做决定了。
+                if (leg.overLimit()) {
+                    warnOverLimit(role, leg.transfer(), warnings);
+                }
+                yield leg.transfer();
+            }
             case NO_EDGE -> {
                 // 这是上游给出的**结论**，不是我们的推断 —— 所以可以直接写死这句话。
                 warnNoEdge(role, from, to, leg.detail(), warnings);
@@ -691,17 +754,73 @@ public class PlanService {
     }
 
     /**
-     * 两座城市之间没有"≤ 上限"的直达 —— 把结论说成**可行动**的一句话。
+     * 有车、但最快的一班也超过了单段上限 —— 把车摆出来，同时**如实说它超了**。
+     *
+     * ── 为什么它必须是单独一条，不能复用 warnNoEdge ──────────────────
+     *   warnNoEdge 说的是"这段路没有走法"，用户该做的动作是**换个目的地**；
+     *   这里说的是"有走法，但它要 X 小时"，用户该做的动作是**自己决定接不接受**。
+     *   两句话的下一步完全不同，混成一句就等于替用户把选择收走了。
+     *
+     *   （实测症状就是这么来的：深圳 → 上海本来只差一句"高铁 6.5 小时"，
+     *     用户看到的却是"在 180 分钟内没有直达车次" —— 一句听起来很确定的假话。）
+     *
+     * ── 为什么仍然把车留在行程里 ────────────────────────────────────
+     *   上限是我们替他设的**默认**，不是他的原话。他可能就是要坐这趟高铁。
+     *   这和 LegService.pick 里"一条都不满足时段就退回第一条"是同一条原则：
+     *   **给一份真实但不理想的东西，永远好过把选择拿走。**
+     *
+     * 文案里有三件事缺一不可：哪一段（role）、最快的一班要多久（具体数字）、
+     * 以及这条线在哪儿调。少任何一个，用户就只能干瞪眼。
+     */
+    private void warnOverLimit(String role, Transfer t, List<String> warnings) {
+        warnings.add(role + "这段路带娃偏累：" + t.from() + " 到 " + t.to()
+                + " 最快的一班也要 " + humanMinutes(t.durationMinutes())
+                + "（" + describeTrain(t) + "）—— 超过单段 " + legService.limitMinutes()
+                + " 分钟这条上限。这趟车仍然安排在行程里，你可以照它订票；"
+                + "觉得这条线该放宽或收紧，改 application.yaml 的 max-leg-minutes");
+    }
+
+    /** "高铁G99 08:00 广州南 → 14:40 上海虹桥" —— 说得出是哪一班，用户才能自己去核对 */
+    private static String describeTrain(Transfer t) {
+        return (t.trainNo() == null ? "车次" : t.trainNo())
+                + " " + clock(t.depDateTime()) + " " + t.depStation()
+                + " → " + clock(t.arrDateTime()) + " " + t.arrStation();
+    }
+
+    /**
+     * 400 → "6 小时 40 分"。带娃出行里，"6 小时 40 分"和"400 分钟"不是一个感受。
+     *
+     * 耗时读不出来时**不编一个数字** —— 给一句不带数字的话，而不是拿一个平均值顶上。
+     */
+    static String humanMinutes(Integer minutes) {
+        if (minutes == null || minutes <= 0) {
+            return "一段不短的车程";
+        }
+        int h = minutes / 60;
+        int m = minutes % 60;
+        if (h == 0) {
+            return m + " 分钟";
+        }
+        return m == 0 ? h + " 小时" : h + " 小时 " + m + " 分";
+    }
+
+    /**
+     * 两座城市之间**真的没有走法** —— 把结论说成**可行动**的一句话。
+     *
+     * ⚠️ 走到这里的前提已经变了：粗筛窗口放宽到 12 小时之后，这句话的含义是
+     *    "连 12 小时内的走法都没有"，而**不是**"超出我们那条上限了"。
+     *    后者有专门的 {@link #warnOverLimit}，而且那时车是**有**的。
+     *    两者的分界线就是"车到底存不存在"——
+     *    把"有车但太长"说成"没有走法"，用户会**永远放弃一条其实能走的路线**。
      *
      * 为什么不能只说"没有查到车次"：用户看到这句话会以为系统坏了，然后重试，
-     * 而重试永远不会成功（是真的没有）。他需要知道的是**该怎么办**：
-     * 要么接受更长的车程，要么换目的地。而且得说清这是"带孩子"的约束，
-     * 否则他会觉得系统管的太宽。
+     * 而重试永远不会成功（是真的没有）。他需要知道的是**该怎么办**。
+     * 而且得说清这是"带孩子"的约束，否则他会觉得系统管得太宽。
      */
     private void warnNoEdge(String role, String from, String to, String detail, List<String> warnings) {
         warnings.add(role + "这段路带娃偏累：" + detail
-                + "。飞猪上这段路要么更慢、要么没有直达，建议换一个近一些的城市，"
-                + "或者确认你能接受这段车程（上限在 application.yaml 的 max-leg-minutes）");
+                + "。飞猪上没有更快的走法 —— 要么换一个近一些的城市，"
+                + "要么这段路你自己安排（比如飞机）");
     }
 
     /**

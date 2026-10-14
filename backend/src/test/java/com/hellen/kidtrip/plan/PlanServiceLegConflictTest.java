@@ -6,6 +6,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.List;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -152,5 +153,33 @@ class PlanServiceLegConflictTest {
         assertNotNull(PlanService.firstDayConflict(
                 day(spot("9:30", "广州动物园")), arrivingAt("2026-11-17T10:39")),
                 "9:30 比 11:39 早得多，必须被抓到");
+    }
+
+    /* ============================================================
+     * 超限车次的文案 —— 警告里那句话的说服力，全在它有没有具体数字
+     * ============================================================ */
+
+    /**
+     * 这一节测的是 `warnOverLimit` 那句警告**唯一**的外部依赖：把分钟说成人话。
+     *
+     * 单独钉它是因为这句话的两种写坏方式都很隐蔽：
+     *   写成 "400 分钟" —— 数字没错，但带娃出行里没人这么感受时间；
+     *   读不出来时填一个平均值 —— 那是在**警告里编数字**，而这条警告的全部价值
+     *   恰恰在于"它给了一个具体、可信的数字"。
+     */
+    @Test
+    @DisplayName("400 分钟 → '6 小时 40 分'（不是 '400 分钟'）")
+    void durationIsSpokenInHumanUnits() {
+        assertEquals("6 小时 40 分", PlanService.humanMinutes(400));
+        assertEquals("3 小时", PlanService.humanMinutes(180), "整点不写成 '3 小时 0 分'");
+        assertEquals("55 分钟", PlanService.humanMinutes(55), "不到一小时就不提小时");
+    }
+
+    @Test
+    @DisplayName("⭐ 耗时读不出来 → 说什么都不编一个数字出来")
+    void unreadableDurationIsNotFabricated() {
+        assertEquals("一段不短的车程", PlanService.humanMinutes(null));
+        assertEquals("一段不短的车程", PlanService.humanMinutes(0),
+                "写成 '0 分钟' 会让这句话读起来像故障");
     }
 }

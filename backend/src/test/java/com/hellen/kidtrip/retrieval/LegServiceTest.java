@@ -9,6 +9,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -171,6 +172,77 @@ class LegServiceTest {
     }
 
     /* ============================================================
+     * ⭐ 过夜车 —— 判跨午夜必须比**日期**，不能比时刻
+     * ============================================================ */
+
+    /**
+     * 实测（2026-11-17 上海 → 深圳，12 小时窗口）：候选里那趟 **20:15 发、次日 07:03 到**的过夜车
+     * 被判成了"最合适的回程"。
+     *
+     * 因为 `RETURN_ARRIVE_BY` 那条上界原来只比 `LocalTime`，而 `07:03 ≤ 20:00` 成立 ——
+     * 次日早上和当天早上在 LocalTime 里**长得一模一样**。于是这趟 10 小时 48 分的夜车
+     * 一路绿灯，而"带娃坐一整夜"这件事它一个字都不会提。
+     *
+     * 这类错的形状在这个工程里出现过很多次：**规则对，取值方式错。**
+     * （`Transfer.arrDateTime` 早就带上了日期，正是为了这件事 —— 只是 pick 这条路没用它。）
+     *
+     * 注意这条是被前一个修复**暴露出来**的：在"超限车次不再被丢弃"之前，
+     * 上海 → 深圳这段整段消失，我们连这趟夜车都看不到，也就不会挑错它。
+     */
+    @Test
+    @DisplayName("⭐ 跨午夜的到达一律不合格（'次日 07:03 到' ≠ '当天 07:03 到'）")
+    void overnightArrivalIsNeverAcceptable() {
+        FlyaiTrain overnight = direct("上海虹桥", "2026-11-25 20:15:00",
+                "深圳北", "2026-11-26 07:03:00", "648", "668.00");
+
+        assertFalse(LegService.acceptable(overnight, LegService.Direction.RETURN),
+                "只看时刻的话它'早上 7 点到家'，完美落在 20:00 上界之内 —— 这正是要挡的");
+    }
+
+    @Test
+    @DisplayName("同日到达但超过 20:00 也不合格 —— 加日期判断不能把原来的上界挤掉")
+    void sameDayButLateIsStillRejected() {
+        // 补"跨午夜"这一条时最容易顺手做的事，是把 RETURN_ARRIVE_BY 弱化掉（"反正日期管着了"）。
+        // 这两条判断管的是两件不同的事：日期管"是不是第二天"，上界管"当天是不是太晚"。
+        FlyaiTrain late = direct("上海虹桥", "2026-11-25 15:10:00",
+                "深圳北", "2026-11-25 21:40:00", "390", "668.00");
+
+        assertFalse(LegService.acceptable(late, LegService.Direction.RETURN), "21:40 到家太晚了");
+        assertTrue(LegService.acceptable(afternoonTrain("14:30:00", "19:50:00"),
+                LegService.Direction.RETURN), "14:30 发、19:50 到才是那条窗口真正想要的车");
+    }
+
+    @Test
+    @DisplayName("⭐ 夜车排在前面也抢不走合格的白天车（它不该被自己的'时刻'骗到）")
+    void overnightDoesNotWinOverAProperAfternoonTrain() {
+        // 列表按时长升序，所以"第一条"未必是最短的那班。
+        // 这里故意把夜车放第一个，模拟它排在候选最前面的情形。
+        FlyaiTrain overnight = direct("上海虹桥", "2026-11-25 20:15:00",
+                "深圳北", "2026-11-26 07:03:00", "648", "668.00");
+        FlyaiTrain afternoon = afternoonTrain("14:30:00", "19:50:00");
+
+        assertEquals(afternoon, LegService.pick(List.of(overnight, afternoon), LegService.Direction.RETURN),
+                "白天有一班合格的，就不该给用户一趟夜车");
+    }
+
+    @Test
+    @DisplayName("只剩夜车可选 → 兜底仍然把它给出去（真实好过一句错话），但它只是兜底")
+    void overnightIsStillGivenWhenItIsTheOnlyOption() {
+        FlyaiTrain overnight = direct("上海虹桥", "2026-11-25 20:15:00",
+                "深圳北", "2026-11-26 07:03:00", "648", "668.00");
+
+        assertEquals(overnight, LegService.pick(List.of(overnight), LegService.Direction.RETURN),
+                "返回 null 会被上层读成'没有车次'—— 那是一句假话");
+        assertFalse(LegService.acceptable(overnight, LegService.Direction.RETURN),
+                "但它是**兜底**选中的，不是'合格' —— 两者的区别以后要用得上（比如单独告警）");
+    }
+
+    /** 一趟同日下午到的车：发车 ≥ 13:00、到达 ≤ 20:00，正是回程窗口想要的那种 */
+    private static FlyaiTrain afternoonTrain(String depAt, String arrAt) {
+        return direct("上海虹桥", "2026-11-25 " + depAt, "深圳北", "2026-11-25 " + arrAt, "320", "668.00");
+    }
+
+    /* ============================================================
      * 翻译成契约
      * ============================================================ */
 
@@ -296,6 +368,97 @@ class LegServiceTest {
     void hoursCeilingNeverZero() {
         assertEquals(1, LegService.hoursCeiling(45));
         assertEquals(1, LegService.hoursCeiling(1));
+    }
+
+    /* ============================================================
+     * ⭐ 粗筛窗口 —— 这一节是 2026-11-17「深圳 → 上海没有车票信息」那个 bug 的修复点
+     * ============================================================ */
+
+    /**
+     * 要钉住的事实只有一句：**发到上游的窗口不能等于那条上限。**
+     *
+     * 这条区别看起来很小，代价却是一个用户直接看得见的故障：
+     * 窗口原来 = hoursCeiling(180) = 3 小时，而深圳 → 上海最快也 6.5 小时 ——
+     * 上游按时长筛完返回 `{"status":1,"message":"行程时长过滤结果为空"}`，
+     * 我们把它读成"这段路没有走法"。于是那份 9 天行程里**一行交通都没有**，
+     * 注意事项还写着"在 180 分钟内没有直达车次"。
+     * 而高铁是存在的 —— **一句听起来很确定的假话，让用户放弃了一条真能走的路线。**
+     */
+    @Test
+    @DisplayName("⭐ 粗筛窗口至少 12 小时 —— 等于上限的话，'最快的一班也超限'的路连候选都拿不到")
+    void searchWindowIsWiderThanTheLimit() {
+        assertEquals(12, LegService.searchWindowHours(180),
+                "180 分钟上限对应 3 小时窗口的话，深圳→上海会被判成'没有走法'");
+        assertEquals(12, LegService.searchWindowHours(45), "上限比窗口小的时候，窗口仍然是 12");
+    }
+
+    @Test
+    @DisplayName("上限调到 12 小时以上时窗口跟着放宽 —— 不是被 12 这个常量卡死")
+    void searchWindowGrowsWithTheLimit() {
+        assertEquals(20, LegService.searchWindowHours(20 * 60));
+        assertEquals(13, LegService.searchWindowHours(12 * 60 + 1), "多一分钟也要跟着进位");
+    }
+
+    @Test
+    @DisplayName("⭐ 真正发出去的参数带的是窗口，不是那条上限")
+    void argsCarryTheWindowNotTheLimit() {
+        List<String> args = LegService.args("深圳", "上海", "2026-11-17", LegService.searchWindowHours(180));
+
+        int i = args.indexOf("--total-duration-hour");
+        assertTrue(i >= 0, "这个参数不能丢 —— 它是服务端粗筛，少了就白拿一堆超长车次");
+        assertEquals("12", args.get(i + 1), "这里要是 3，深圳→上海这种路会直接被上游判成'结果为空'");
+        assertEquals("4", args.get(args.indexOf("--sort-type") + 1),
+                "时长升序不能丢 —— pick 靠'第一条'拿最快的那班，不排就全错");
+        assertEquals("2026-11-17", args.get(args.indexOf("--dep-date") + 1));
+    }
+
+    /* ============================================================
+     * ⭐ 有车、但最快的一班也超过上限
+     * ============================================================ */
+
+    @Test
+    @DisplayName("⭐ 全超限 → FOUND + overLimit，并且把最快的那班给出去（绝不能是 NO_EDGE）")
+    void overLimitStillYieldsTheFastestTrain() {
+        // 实测形状：深圳 → 上海只找得到 6 小时以上的车，而上限是 180 分钟。
+        // 老行为是返回 NO_EDGE —— 用户看到"没有直达车次"（假话），行程里也没有交通那一行。
+        List<FlyaiTrain> allTooLong = List.of(
+                direct("深圳北", "2026-11-17 08:00:00", "上海虹桥", "2026-11-17 14:40:00", "400", "680.00"),
+                direct("深圳北", "2026-11-17 09:15:00", "上海虹桥", "2026-11-17 16:05:00", "410", "680.00"));
+
+        LegService.Leg leg = LegService.overLimitOrNone("深圳", "上海", "flyai search-train",
+                12, 180, allTooLong, LegService.Direction.OUTBOUND);
+
+        assertEquals(LegService.Outcome.FOUND, leg.outcome(), "有车就是有车 —— 报成'没有走法'是假话");
+        assertTrue(leg.overLimit(), "但必须标出来它超了，否则界面上看起来就像一条时长合适的车");
+        assertNotNull(leg.transfer());
+        assertEquals(400, leg.transfer().durationMinutes(), "给的是最快的（列表已按时长升序）");
+        assertEquals("上海虹桥", leg.transfer().arrStation(), "中转/直达都要取最终到达站");
+    }
+
+    @Test
+    @DisplayName("一条候选都没有 → NO_EDGE（这时候'没有走法'才是真的）")
+    void noCandidatesIsNoEdge() {
+        LegService.Leg leg = LegService.overLimitOrNone("深圳", "上海", "flyai search-train",
+                12, 180, List.of(), LegService.Direction.OUTBOUND);
+
+        assertEquals(LegService.Outcome.NO_EDGE, leg.outcome());
+        assertNull(leg.transfer());
+        assertFalse(leg.overLimit());
+        assertTrue(leg.detail().contains("12 小时"),
+                "要说清查过多大的窗口，否则用户会以为我们只查了 3 小时就下结论：" + leg.detail());
+    }
+
+    @Test
+    @DisplayName("候选是 journeys 为空的脏数据 → NO_EDGE，而不是给一个字段全空的 Transfer")
+    void brokenCandidateFallsBackToNoEdge() {
+        List<FlyaiTrain> broken = List.of(new FlyaiTrain(List.of(), "680.00", "400", null));
+
+        LegService.Leg leg = LegService.overLimitOrNone("深圳", "上海", "flyai search-train",
+                12, 180, broken, LegService.Direction.OUTBOUND);
+
+        assertEquals(LegService.Outcome.NO_EDGE, leg.outcome(),
+                "假的一行交通比'没查到'更糟 —— 它看起来完全正常，没人会去查它");
+        assertNull(leg.transfer());
     }
 
     /* ============================================================

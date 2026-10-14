@@ -65,7 +65,9 @@ try {
   async function readProfile() {
     const rows = await page.$$eval('aside dl > div', (els) =>
       els.map((e) => [
-        e.querySelector('dt')?.textContent?.trim() ?? '',
+        // 标签后面可能跟一个必填标记（`出发地*`）—— 去掉它，否则这张表的 key 会随界面一起变。
+        // 这不是"宽容"，是把两件事分开：界面怎么标必填会变（星号/颜色/图标），字段名是契约。
+        (e.querySelector('dt')?.textContent?.trim() ?? '').replace(/\*+$/, ''),
         e.querySelector('dd')?.textContent?.trim() ?? '',
       ]),
     )
@@ -95,6 +97,20 @@ try {
     `出发地=${profile['出发地']}（这一行是 L1 新加的字段）`)
   check(profile['目的地'] === CITY, `目的地是 ${CITY}`, `目的地=${profile['目的地']}`)
   await page.screenshot({ path: `${SHOTS}l1-ui-1-profile.png`, fullPage: true })
+
+  /* ── 光标：这一轮结束后应该回到输入框 ────────────────────────────
+   * 上面每一轮都是**点按钮**发的（不是敲 Enter），所以焦点此刻在「发送」那个按钮上。
+   * 于是这条断言有真实的失败可能：不写那句 focus 的话，它会一直停在按钮上，
+   * 用户每轮都要再点一下输入框 —— 而"接着打字"正是他接下来唯一要做的事。
+   */
+  const active = await page.evaluate(() => {
+    const el = document.activeElement
+    if (!el) return 'null'
+    return el.tagName + (el.getAttribute('placeholder') ? `(${el.getAttribute('placeholder')})` : '')
+  })
+  check(active.startsWith('INPUT'),
+    '⭐ 一轮结束后光标自动回到输入框（不然每轮都得先点一下）',
+    `当前焦点：${active}`)
 
   /* ── 生成 ───────────────────────────────────────────────────── */
   console.log('\n【2】点「生成行程」，等 20~90 秒')
@@ -174,9 +190,14 @@ try {
   check(body.includes(`--origin ${ORIGIN}`) && body.includes(`--origin ${CITY}`),
     `⭐ 去程和回程两条车次命令都能看见（--origin ${ORIGIN} 与 --origin ${CITY} 都在）`,
     body.match(/search-train[^\n]{0,80}/g)?.join('\n      ') ?? '一条 search-train 都没渲染出来')
-  check(body.includes('--total-duration-hour 3'),
-    '⭐ 命令里带着 3 小时上限 —— 界面上能看见"这条约束真的被拿去查了"',
-    '这是这份产品唯一的核心约束，它不该只活在配置文件和注释里')
+  // ⚠️ 这个数字在 2026-11-17 从 3 改成了 12 —— 它是**粗筛窗口**，不是那条上限。
+  //    窗口曾经等于上限的向上取整（180 分钟 → 3 小时），后果很具体：深圳 → 上海这种
+  //    "最快的一班也超上限"的路会被上游判成"结果为空"，界面上就**整行交通消失**
+  //    （详见 `verify-leg-overlimit.mjs`）。放宽到 12 之后，红线只活在本地那条
+  //    `minutes <= maxLegMinutes()` 上，而那条上限现在出现在**超限警告**的文案里。
+  check(body.includes('--total-duration-hour 12'),
+    '⭐ 命令里带着粗筛窗口（12 小时）—— 红线在本地判，不在上游参数里',
+    '窗口要是等于上限，超过上限的路线会连候选都拿不到，界面上就整行没有交通')
   await page.screenshot({ path: `${SHOTS}l1-ui-3-provenance.png`, fullPage: true })
 } catch (e) {
   check(false, '脚本执行完成', `异常：${e.message}`)

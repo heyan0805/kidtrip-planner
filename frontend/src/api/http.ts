@@ -125,6 +125,15 @@ async function useMock<T>(path: string, mock: (() => T | Promise<T>) | undefined
 export interface RequestOptions<T> {
   method?: 'GET' | 'POST'
   body?: unknown
+  /**
+   * 额外请求头。
+   *
+   * 眼下只有一个用处：/generate 用它带 `X-Run-Id`，好让后端把这一趟的进度登记下来。
+   * 它**刻意不进请求体** —— 进度是旁路信息（"我想看它怎么跑"），不是这次生成要用的输入。
+   * 塞进 body 就等于往那份被后端契约测试和前端类型两头钉着的形状里凭空加一个字段，
+   * 以后没人说得清"这个字段到底受哪份测试保护"。
+   */
+  headers?: Record<string, string>
   /** 覆盖默认超时。只有明确知道"这个接口更快/更慢"时才传 */
   timeoutMs?: number
   /** 调用方的取消信号（组件卸载时用） */
@@ -187,7 +196,7 @@ async function realRequest<T>(path: string, options: RequestOptions<T>): Promise
   try {
     res = await fetch(url, {
       method: options.method ?? 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...options.headers },
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
       signal: controller.signal,
     })

@@ -410,6 +410,48 @@ export interface TravelPlan {
   spotPool: SpotOption[]
 }
 
+/* ============================================================
+ * 生成进度 —— GET /api/plan/progress/{runId}
+ *
+ * 它回答的是"这几十秒里系统在干什么"，**不是"还要多久"**。
+ *
+ * ⚠️ 这里故意**没有** percentage / progress 之类的字段：五段的耗时完全不可预测
+ *    （模型那两段随负载在 10~30 秒之间浮动），任何百分数都只能靠编 ——
+ *    而这个产品最不能出的错就是"看起来很像真的、其实是编的"。
+ *    已经走完的部分是真的，没走完的不猜。界面上因此没有进度条，只有一条流水线。
+ * ============================================================ */
+
+/** 某一步此刻的状态。后端报什么就是什么，前端不做任何推断 */
+export type ProgressStepState = 'PENDING' | 'RUNNING' | 'DONE' | 'FAILED'
+
+export interface PlanProgressStep {
+  /** 后端的 Stage 名。**只用来做 React 的 key**，不用来查文案（文案见下） */
+  key: string
+  /**
+   * 这一步叫什么 —— **由后端给**。
+   * 前端要是自己维护一份 key→文案 的表，后端改了阶段顺序而前端忘了跟，
+   * 界面就会按错的顺序打勾，而这件事**不报错**，只是长期地错。
+   */
+  label: string
+  state: ProgressStepState
+  /**
+   * 这一步真实花了多少毫秒。
+   * ⚠️ null 的含义是**还没走完**，不是"花了 0"—— 所以判空不能写成 `!s.tookMs`。
+   */
+  tookMs: number | null
+}
+
+export interface PlanProgress {
+  /** 全部步骤，顺序即执行顺序（后端给的，前端不许自己重排） */
+  steps: PlanProgressStep[]
+  /** 从后端开始干活到此刻。用它显示"已用 N 秒" */
+  elapsedMs: number
+  /** 这趟是否已经收场（成功或失败都算） */
+  finished: boolean
+  /** 只在 finished 为 true 时有意义：false 表示这趟没排出来 */
+  ok: boolean
+}
+
 /**
  * 一个**还没被排进日程的合格景点**。逐字镜像后端 `plan/SpotOption.java`。
  *

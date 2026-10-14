@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { chatPlan, generatePlan } from '../api/plan'
+import { chatPlan, fetchPlanProgress, generatePlan } from '../api/plan'
 import { ApiError, subscribeMockNotice } from '../api/http'
-import type { Message, SpotOption, TravelDay, TravelPlan, TravelParams, TravelSpot } from '../types/plan'
+import type {
+  Message,
+  PlanProgress,
+  SpotOption,
+  TravelDay,
+  TravelPlan,
+  TravelParams,
+  TravelSpot,
+} from '../types/plan'
 
 /**
  * 对话的状态机 —— "上下文传递"的前端一侧全部在这里。
@@ -33,10 +41,30 @@ export interface UsePlanChat {
   error: string | null
   /** 正在用本地假数据时的提示（可能为 null） */
   mockNotice: string | null
-  /** 必填项齐了没有 —— 只认 city：后端没有城市就什么都做不了 */
+  /**
+   * 必填项齐了没有。
+   *
+   * ⚠️ 判据是 {@link REQUIRED_FIELDS} 那五项，**不是**"知道城市就行"（见那段说明）。
+   */
   canGenerate: boolean
+  /**
+   * 还差哪几项必填。
+   *
+   * 它存在的唯一理由是让界面**说清为什么点不了** —— 一个灰着的按钮、不写原因，
+   * 用户只会以为界面坏了，而不是回去把信息补上。
+   */
+  missingFields: Array<keyof TravelParams>
   /** 用户手动换过的点（稀疏覆盖，不是整份行程）。见下面 swaps 的说明 */
   swaps: SpotEdits
+  /**
+   * 生成期间的进度 —— 后端每走完一步就把它报出来。
+   *
+   * 三种"没有进度"要分清楚，不过界面对它们的处理是一样的（**都不假装有进度**）：
+   *   null       —— 还没开始，或者已经收场
+   *   五步全待办 —— 后端刚收到请求，还没跑到第一步（一两毫秒的窗口，肉眼见不到）
+   *   一直拿不到 —— 轮询失败（后端在忙、网络抖）。**这不是错误**，安静退化成普通等待就行
+   */
+  progress: PlanProgress | null
   sendRound: (text: string) => Promise<void>
   generate: () => Promise<void>
   swapSpot: (day: number, index: number, option: SpotOption) => void
@@ -48,6 +76,80 @@ let bubbleSeq = 0
 function bubble(role: Message['role'], content: string): ChatBubble {
   bubbleSeq += 1
   return { id: `m${bubbleSeq}`, role, content }
+}
+
+/**
+ * 生成行程的**必填项**。
+ *
+ * ── 为什么不能只判 city ────────────────────────────────────────────
+ *   `canGenerate` 原来写的是 `Boolean(params.city?.trim())` —— 只要知道"去哪"就能点。
+ *   而同一张画像卡上分明还写着"天数 / 出发日期 / 孩子年龄"是**待确认**。
+ *   后果不是报错，而是**静默地拿默认值把空缺补上**：后端 `TravelParams.orDefaults()`
+ *   会把 days 补成 3，于是用户点下去、出来一份"玩 3 天"的行程 —— 而他刚才说的是 9 天。
+ *   **默认值是对的兜底，但它绝不该被当成"用户已经说过了"。**
+ *
+ * ── 为什么是这五项 ────────────────────────────────────────────────
+ *   每一项都直接决定"查什么、怎么排"，没有一项是我们有权替他定的：
+ *     origin     从哪走   —— 没有它，"每段不能太长"这条约束根本落不了地
+ *     city       去哪儿   —— 没有它，检索和排期都无从开始
+ *     days       几天     —— 决定排几天、酒店要住几晚
+ *     startDate  哪天走   —— 车次班次、酒店价格全跟着它
+ *     childAge   孩子多大 —— 这个产品的身份约束，直接决定节奏和点位的现实性
+ *
+ * ── 哪些**刻意不在**必填里 ────────────────────────────────────────
+ *   preferences / pace / stroller。它们是有默认值（而且有依据）的产品策略 ——
+ *   用户不说，我们有权利替他定。把它们也设成必填，等于逼他先回答
+ *   "要不要带推车"才能看到行程，那是把选择权收得太紧了。
+ *   ⚠️ 代价说清楚：不常驻，不代表不用问。模型仍然会问，只是**没答也能继续**。
+ *
+ * ── 为什么导出它，而不是让界面自己再写一份 ──────────────────────────
+ *   两个地方要用同一份清单：这里算 canGenerate，画像卡那边标"哪个格子必须填"。
+ *   写两份一定会漂移，而漂移的症状是"按钮亮着、界面上却有个必填格子还空着" ——
+ *   两个地方都不报错，只是互相矛盾，而且**没人会去查**。
+ *   判据只能有一个来源，所以它对界面是公开的。
+ */
+export const REQUIRED_FIELDS: Array<keyof TravelParams> = [
+  'origin',
+  'city',
+  'days',
+  'startDate',
+  'childAge',
+]
+
+/**
+ * 这个格子算填上了吗。
+ *
+ * ⚠️ 五类"没填"都要挡住，和 `TravelParams.mergedWith` 那边是**同一套规矩**：
+ *   undefined / null / 空串（模型被要求输出字符串时常用空串表示"没有"）/
+ *   0 或负数 / 空数组。
+ *
+ * ⚠️ 特别是数字：**0 必须算没填**。参照工程的 prompt 教模型"用 0 表示未确定"，
+ *    而 `days: 0` 会被 orDefaults() 补成 3 —— 一个"没答"就这样变成了"3 天"。
+ *    只看 null 的话，这个错永远不会被发现。
+ */
+function isFilled(v: unknown): boolean {
+  if (v === undefined || v === null) return false
+  if (typeof v === 'string') return v.trim() !== ''
+  if (typeof v === 'number') return v > 0
+  if (Array.isArray(v)) return v.length > 0
+  return true
+}
+
+/** 进度轮询间隔。1 秒够了：五步里最短的一步也有好几秒，而每问一次只有几十字节 */
+const PROGRESS_POLL_MS = 1000
+
+/**
+ * 为这一趟生成造一个 id。
+ *
+ * `crypto.randomUUID` 只在**安全上下文**（https / localhost）里存在。线上是 https
+ * （走穿透也是 https），但用 `http://192.168.x.x` 在局域网打开时它就没有 —— 那时降级成一个弱 id。
+ * 敢降级是因为后端只拿它当 Map 的键，**不需要不可猜**：
+ * 它不参与鉴权、不落库、几分钟后自动清掉；猜到它最多是看到别人一次生成的步骤名。
+ */
+function newRunId(): string {
+  const c = globalThis.crypto
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID()
+  return `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
 }
 
 /**
@@ -147,6 +249,8 @@ export function usePlanChat(): UsePlanChat {
   const [mockNotice, setMockNotice] = useState<string | null>(null)
   /** 用户手动换过的点。它和后端那份 plan 是**两个独立的状态**，渲染时才叠加（见上面那段说明） */
   const [swaps, setSwaps] = useState<SpotEdits>({})
+  /** 生成进度。三种取不到的情况见 UsePlanChat.progress 的说明 */
+  const [progress, setProgress] = useState<PlanProgress | null>(null)
 
   /* ── 坑 ①：过期闭包 ────────────────────────────────────────────
    * 下面两个 ref 是 state 的"镜像"，专门给异步流程读。
@@ -180,6 +284,32 @@ export function usePlanChat(): UsePlanChat {
   /** 卸载时取消掉正在飞的请求 */
   const abortRef = useRef<AbortController | null>(null)
 
+  /** 进度轮询的定时器。生成一结束就必须停掉 —— 不然它会一直问，问到一个刷新页面为止 */
+  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  /**
+   * 上一拍还没回来。
+   *
+   * 为什么需要这个闸门：**请求偶尔会比间隔还慢**。那一拍要是照样发出去，
+   * 慢的时候就会同时堆着两三个请求，而且越慢越堆 —— 而它们问的是同一件事，纯属浪费。
+   * 和 sendRound 那个 inFlight 闸门是同一条规矩：**宁可少问一次，不要堆。**
+   */
+  const pollBusy = useRef(false)
+
+  /**
+   * 停掉轮询。
+   *
+   * ⚠️ 它必须定义在**卸载的 useEffect 之前** —— 那个 effect 的依赖数组会引用它，
+   *    而依赖数组是在渲染时求值的：定义在后面就会撞上 const 的"先用后定义"，直接报错。
+   */
+  const stopPolling = useCallback(() => {
+    if (pollTimer.current !== null) {
+      clearInterval(pollTimer.current)
+      pollTimer.current = null
+    }
+    pollBusy.current = false
+  }, [])
+
   useEffect(() => {
     const unsubscribe = subscribeMockNotice(setMockNotice)
     return unsubscribe
@@ -189,9 +319,13 @@ export function usePlanChat(): UsePlanChat {
     // 卸载时 abort：不 abort 的话，请求回来后 setState 会打到一个已经卸载的组件上
     // （React 18 之后不会再警告了，但那份响应依然是没人要的 —— 该取消就取消）
     return () => {
+      // ⚠️ abort 管不住定时器。它只让"正在飞的这一拍"作废，
+      //    而 setInterval 还会一拍一拍继续发下去 —— 组件都没了，它还在问后端。
+      //    两件事都要做，少一个就有东西活着。
+      stopPolling()
       abortRef.current?.abort()
     }
-  }, [])
+  }, [stopPolling])
 
   /** messages 与它的镜像一起写 —— 少写一个就会出现"界面是新的、请求是旧的" */
   const commitMessages = useCallback((next: ChatBubble[]) => {
@@ -203,6 +337,38 @@ export function usePlanChat(): UsePlanChat {
     paramsRef.current = next
     setParams(next)
   }, [])
+
+  /* ── 生成进度：一边飞 /generate，一边每秒问一句"到哪了" ─────────────
+   * 为什么是轮询、而不是让 /generate 流式返回？理由在后端 PlanController 顶上写着，
+   * 一句话：这条产品要跑在内网穿透上，而 Cloudflare 免费隧道不支持 SSE。
+   */
+  const askProgress = useCallback(async (runId: string, signal: AbortSignal) => {
+    if (pollBusy.current) return // 上一拍还在路上，这一拍直接放弃（见 pollBusy 的说明）
+    pollBusy.current = true
+    try {
+      const p = await fetchPlanProgress(runId, signal)
+      // null 说明后端那条记录已经不在了（这趟收场了）。**刻意不清空已有的进度** ——
+      // 清掉会让面板在最后一刻闪回"一步都没走"的样子，比留着更让人困惑。
+      if (!signal.aborted && p) setProgress(p)
+    } catch {
+      // ⚠️ 进度是观测，不是业务。它失败**绝不能**影响这次生成，也绝不能弹错 ——
+      //    用户该看到的是行程（或者一个真实的生成失败），而不是"进度查询失败了"。
+      //    这个空 catch 是有意的：后端在忙、或者网络抖一下，下一拍照问就是了。
+    } finally {
+      pollBusy.current = false
+    }
+  }, [])
+
+  const startPolling = useCallback(
+    (runId: string, signal: AbortSignal) => {
+      stopPolling()
+      // 先立刻问一次，不等第一个间隔 —— 否则头一秒面板里什么都没有，
+      // 而那一秒恰恰是最需要看见"它在动"的一秒。
+      void askProgress(runId, signal)
+      pollTimer.current = setInterval(() => void askProgress(runId, signal), PROGRESS_POLL_MS)
+    },
+    [askProgress, stopPolling],
+  )
 
   const sendRound = useCallback(
     async (text: string) => {
@@ -252,6 +418,7 @@ export function usePlanChat(): UsePlanChat {
     setError(null)
     setGenerating(true)
     setPlan(null)
+    setProgress(null)
     // 旧行程上的手动改动必须跟着旧行程一起消失。
     // 不清的话，新行程的第 1 天第 1 个点会被上一个城市的某个备选盖掉 ——
     // 而键是 `${day}:${index}`，它在新行程里**同样成立**，所以这个错不会报错、只会显示成
@@ -261,21 +428,27 @@ export function usePlanChat(): UsePlanChat {
     const controller = new AbortController()
     abortRef.current = controller
 
+    // runId 必须在 /generate **发出去之前**就定下来 ——
+    // 晚一步，头一两秒的进度就记不进去了，而后端那两秒正好是"在查车次"。
+    const runId = newRunId()
+    startPolling(runId, controller.signal)
+
     try {
       // 只传 params：**不要自己拼 retrieval**。
       // 检索条件该由后端按画像规划（那是它的正常产出方式），
       // 前端这里传一份自己猜的，反而会把那次规划顶掉。
-      const result = await generatePlan({ params: paramsRef.current }, controller.signal)
+      const result = await generatePlan({ params: paramsRef.current }, controller.signal, runId)
       setPlan(result)
     } catch (e) {
       if (e instanceof ApiError && e.kind === 'aborted') return
       setError(messageOf(e))
     } finally {
+      stopPolling()
       inFlight.current = false
       abortRef.current = null
       setGenerating(false)
     }
-  }, [])
+  }, [startPolling, stopPolling])
 
   /**
    * 把某一天的第 index 个点换成 option。
@@ -305,6 +478,7 @@ export function usePlanChat(): UsePlanChat {
   }, [])
 
   const reset = useCallback(() => {
+    stopPolling()
     abortRef.current?.abort()
     abortRef.current = null
     inFlight.current = false
@@ -312,10 +486,24 @@ export function usePlanChat(): UsePlanChat {
     commitParams({})
     setPlan(null)
     setSwaps({})
+    setProgress(null)
     setError(null)
     setSending(false)
     setGenerating(false)
-  }, [commitMessages, commitParams])
+  }, [commitMessages, commitParams, stopPolling])
+
+  /**
+   * 还差哪几项必填。
+   *
+   * 每次渲染现算，**不做 memo**：它只过滤五个字段，代价小到可以忽略；
+   * 而缓存它就得跟着 params 的引用走，白白多一处"什么时候该重算"的地方 ——
+   * 那种地方正是这类小计算最容易出错、又最难发现的原因（值不该旧的时候旧了）。
+   *
+   * ⚠️ 判据必须是 `missingRequired.length === 0`，而不是反过来写
+   *    `canGenerate = REQUIRED_FIELDS.every(...)` 再单独算一遍 —— 那样两处判据
+   *    就有机会分叉，而"按钮亮着但还差一项"这种不一致不会报错。
+   */
+  const missingRequired = REQUIRED_FIELDS.filter((k) => !isFilled(params[k]))
 
   return {
     messages,
@@ -325,8 +513,10 @@ export function usePlanChat(): UsePlanChat {
     generating,
     error,
     mockNotice,
-    canGenerate: Boolean(params.city?.trim()),
+    canGenerate: missingRequired.length === 0,
+    missingFields: missingRequired,
     swaps,
+    progress,
     sendRound,
     generate,
     swapSpot,

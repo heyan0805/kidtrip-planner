@@ -115,8 +115,10 @@ check(trainQueries.some((q) => q.includes(`--origin ${ORIGIN}`) && q.includes(`-
   '去程命令的起终点正确')
 check(trainQueries.some((q) => q.includes(`--origin ${CITY}`) && q.includes(`--destination ${ORIGIN}`)),
   '回程命令的起终点正确')
-check(trainQueries.every((q) => q.includes('--total-duration-hour 3')),
-  '都带上了 3 小时上限（180 分钟）',
+// ⚠️ 12 是**粗筛窗口**，不是那条 180 分钟的上限 —— 两者故意不是同一个数。
+//    见 `verify-leg-overlimit.mjs`：窗口等于上限时，"最快的一班也超上限"的路会连候选都拿不到。
+check(trainQueries.every((q) => q.includes('--total-duration-hour 12')),
+  '都带上了粗筛窗口（12 小时）',
   trainQueries.join(' | '))
 check(trainQueries.some((q) => q.includes(`--dep-date ${START}`)), '去程带了出发日')
 check(trainQueries.some((q) => q.includes(`--dep-date ${END}`)), '回程带了最后一天')
@@ -126,8 +128,10 @@ console.log('\n【3】⭐ 独立复算（防止字段静默错位）')
 if (outbound) {
   await sleep(4000) // 让后端那边的限流窗口过去，我们自己的调用别撞上去
   const raw = await cli([
+    // ⚠️ 这里必须和后端现在发的窗口**一模一样**（12 小时），否则我们复算用的候选集
+    //    和它看到的那份就不是同一份 —— 复算就变成了对着另一堆数据自证。
     'search-train', '--origin', ORIGIN, '--destination', CITY,
-    '--dep-date', START, '--total-duration-hour', '3', '--sort-type', '4',
+    '--dep-date', START, '--total-duration-hour', '12', '--sort-type', '4',
   ])
   const items = raw?.data?.itemList ?? []
   check(items.length > 0, '独立查询也拿到了候车', `命中 ${items.length}`)

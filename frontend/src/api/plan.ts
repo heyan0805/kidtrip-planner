@@ -3,6 +3,7 @@ import type {
   PlanChatData,
   PlanChatRequest,
   PlanGenerateRequest,
+  PlanProgress,
   SpotOption,
   Transfer,
   TravelParams,
@@ -33,16 +34,52 @@ export function chatPlan(req: PlanChatRequest, signal?: AbortSignal): Promise<Pl
   })
 }
 
-/** 生成行程。第一个参数一般只填 params —— retrieval 交给后端去规划 */
-export function generatePlan(req: PlanGenerateRequest, signal?: AbortSignal): Promise<TravelPlan> {
+/**
+ * 生成行程。第一个参数一般只填 params —— retrieval 交给后端去规划。
+ *
+ * `runId` 排在**第三位**，而且可选。它只为进度服务：带上它，后端就会用这个 id
+ * 把这一趟的五步记下来，前端就能一边等一边看。
+ * 不放在 req 里，是因为它压根不是这次生成的输入 ——
+ * 它是顺带告诉后端一声"这一趟记个 id，我待会儿要看"。
+ */
+export function generatePlan(
+  req: PlanGenerateRequest,
+  signal?: AbortSignal,
+  runId?: string,
+): Promise<TravelPlan> {
   return request<TravelPlan>('/plan/generate', {
     body: req,
     signal,
+    headers: runId ? { 'X-Run-Id': runId } : undefined,
     // 不传超时，用 http.ts 的默认值（180 秒）—— 这个接口的正常耗时就是 25~90 秒。
     // 这里**刻意不写**一个"看起来更合理"的数字：写 60 就会复现那个"超时被当成连不上"的 bug。
     // （同一条不要在这里重复声明的地方还有一处：180 那个数字是跟着后端预算算出来的，
     //   理由写在 http.ts 的 DEFAULT_TIMEOUT_MS 上，改的时候只改那一处。）
     mock: () => mockPlan(req),
+  })
+}
+
+/**
+ * 问一次"这趟生成走到哪了"。前端在 /generate 飞着的时候每秒问一次。
+ *
+ * 三个刻意的选择：
+ *
+ * ① **不传 mock。** request() 只在"network 失败 **且** 备了 mock"时才降级，
+ *    所以不传就是不参与降级 —— 进度是纯观测，问不到就安静算了。
+ *    绝不该因为它失败，而在界面顶上挂出一条"正在使用假数据"的横幅：
+ *    **一个观测动作不该改变用户对数据源的整体判断。**
+ *
+ * ② **超时 5 秒**，比默认那 180 秒短得多。180 是给 /generate 那种重活留的；
+ *    进度是个几十字节的查询，5 秒不回来说明这一次不值得等 —— 反正下一拍 1 秒后就到。
+ *
+ * ③ **它可能返回 null**（后端查不到这个 runId，或那条记录已过期）。那不是错误：
+ *    轮询的最后一拍总要在生成结束之后落地，null 就是"这趟已经不在场上了"。
+ */
+export function fetchPlanProgress(runId: string, signal?: AbortSignal): Promise<PlanProgress | null> {
+  return request<PlanProgress | null>(`/plan/progress/${encodeURIComponent(runId)}`, {
+    method: 'GET',
+    signal,
+    timeoutMs: 5_000,
   })
 }
 

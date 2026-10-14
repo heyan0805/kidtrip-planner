@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import { applySwaps, swapKey, usePlanChat } from '../../hooks/usePlanChat'
+import { REQUIRED_FIELDS, applySwaps, swapKey, usePlanChat } from '../../hooks/usePlanChat'
 import type { SpotEdits } from '../../hooks/usePlanChat'
-import type { SpotOption, Transfer, TravelDay, TravelParams, TravelPlan, TravelSpot } from '../../types/plan'
+import type {
+  PlanProgress,
+  PlanProgressStep,
+  SpotOption,
+  Transfer,
+  TravelDay,
+  TravelParams,
+  TravelPlan,
+  TravelSpot,
+} from '../../types/plan'
 
 /**
  * 对话页 —— B5 的可见部分。
@@ -19,6 +28,9 @@ export default function TravelPlanner() {
   const chat = usePlanChat()
   const [draft, setDraft] = useState('')
   const listRef = useRef<HTMLDivElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  /** 上一帧的 busy —— 用来识别"忙 → 不忙"这个**边沿**，见下面那个 effect */
+  const wasBusy = useRef(false)
 
   // 新消息进来时滚到底 —— 否则用户看不到自己刚说的话（消息在下面）
   useEffect(() => {
@@ -27,6 +39,28 @@ export default function TravelPlanner() {
   }, [chat.messages.length, chat.sending])
 
   const busy = chat.sending || chat.generating
+
+  /**
+   * 一轮结束后，把光标送回输入框。
+   *
+   * 为什么值得写：这一轮结束之后，用户接下来唯一想做的事就是**接着打字**
+   * （继续回答问题，或者对刚生成的行程提要求）。光标不在那儿，他每轮都要先点一下，
+   * 而这一下没有任何信息量。
+   *
+   * ⚠️ 判据是"从忙到不忙"这个边沿，不是"不忙就聚焦"。
+   *    写成后者的话，每次渲染都会抢一次焦点 —— 用户想在页面上选一段文字复制都会被弹回来，
+   *    那比原来的问题更烦人。
+   *
+   * ⚠️ `preventScroll`：默认的 focus() 会把视口滚到输入框。而"生成完成"那一刻用户
+   *    很可能正在往下看刚出来的行程，一滚就把视线拉走了。这里只要光标，不要滚动。
+   *
+   * ⚠️ 刻意**不做** autoFocus（首屏自动聚焦）：手机上一进页面就弹键盘，而这台设备
+   *    未必是用户第一眼想打字的地方。用户的原话也是"AI 回答完后"。
+   */
+  useEffect(() => {
+    if (wasBusy.current && !busy) inputRef.current?.focus({ preventScroll: true })
+    wasBusy.current = busy
+  }, [busy])
 
   async function submit() {
     const text = draft
@@ -92,6 +126,7 @@ export default function TravelPlanner() {
 
             <div className="flex gap-2 border-t border-gray-200 p-3">
               <input
+                ref={inputRef}
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 onKeyDown={(e) => {
@@ -120,7 +155,7 @@ export default function TravelPlanner() {
 
           {/* ── 右：画像卡 ────────────────────────────────── */}
           <aside className="space-y-4">
-            <ProfileCard params={chat.params} />
+            <ProfileCard params={chat.params} missing={chat.missingFields} />
 
             <button
               type="button"
@@ -128,16 +163,23 @@ export default function TravelPlanner() {
               disabled={!chat.canGenerate || busy}
               className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800 disabled:bg-gray-300"
             >
-              {chat.generating ? '正在生成（要几十秒）…' : '生成行程'}
+              {chat.generating ? '正在生成…' : '生成行程'}
             </button>
             {!chat.canGenerate && (
-              <p className="text-xs text-gray-400">至少要知道去哪座城市，才能开始查。</p>
-            )}
-            {chat.generating && (
-              <p className="text-xs text-gray-400">
-                这一步要真的去查飞猪、再让模型排期，25~60 秒是正常的。
+              // 点不了的时候必须说清**为什么**。一个灰着的按钮、不写原因，
+              // 用户只会以为界面坏了，而不是回去把信息补上 ——
+              // 而这恰好是他唯一能做的动作。
+              <p className="text-xs text-amber-700">
+                还差{missingLabels(chat.missingFields)} —— 这几项各自直接决定查什么、怎么排。
               </p>
             )}
+            {/* 原来这里是一句"这一步要真的去查飞猪、再让模型排期，25~60 秒是正常的"。
+                它被这张面板取代了 —— 那句话在解释"为什么这么久"，
+                而面板直接把正在走的每一步摊开。**解释不如让人看见。**
+
+                放在按钮正下方，是为了不用滚动就能看到它：
+                用户的眼睛刚点完这个按钮，进度就该出现在他正在看的地方。 */}
+            {chat.generating && <GeneratingPanel progress={chat.progress} />}
           </aside>
         </div>
 
@@ -164,6 +206,9 @@ export default function TravelPlanner() {
  * ⚠️ origin 排在 city 前面，不是排版偏好：先问"从哪儿走"再问"去哪儿玩"，
  *    是用户脑子里本来就有的顺序（家 → 目的地）。顺序反了，模型会先问目的地，
  *    用户答了一个城市，下一轮才被问出发地 —— 而他刚才那句话里其实已经带上了。
+ *
+ * ⚠️ 这里**不重复声明**哪些是必填 —— 那是 `REQUIRED_FIELDS` 的事（唯一的判据来源）。
+ *    这份清单只负责"有哪些字段、怎么叫、按什么顺序显示"。
  */
 const FIELDS: Array<{ key: keyof TravelParams; label: string }> = [
   { key: 'origin', label: '出发地' },
@@ -176,19 +221,61 @@ const FIELDS: Array<{ key: keyof TravelParams; label: string }> = [
   { key: 'stroller', label: '推车' },
 ]
 
-function ProfileCard({ params }: { params: TravelParams }) {
+/**
+ * 把缺的 key 说成人话："出发地、孩子年龄"。
+ *
+ * 顺序按 FIELDS 取（也就是提问顺序），不是按 missing 数组的顺序 ——
+ * 这样读起来和用户刚才被问的顺序一致，而不是一个跳来跳去的序列。
+ */
+function missingLabels(missing: Array<keyof TravelParams>): string {
+  if (missing.length === 0) return ''
+  return FIELDS.filter((f) => missing.includes(f.key))
+    .map((f) => f.label)
+    .join('、')
+}
+
+function ProfileCard({
+  params,
+  missing,
+}: {
+  params: TravelParams
+  /** 还空着的**必填**项。只有必填项会出现在这里，所以它同时承担"这格必须填"这个信息 */
+  missing: Array<keyof TravelParams>
+}) {
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-4">
       <h2 className="text-sm font-medium text-gray-900">已收集的信息</h2>
       <p className="mt-1 text-xs text-gray-400">这就是"上下文"里被提炼出来的那部分</p>
       <dl className="mt-3 space-y-2">
-        {FIELDS.map((f) => (
-          <div key={f.key} className="flex items-start justify-between gap-3 text-sm">
-            <dt className="text-gray-500">{f.label}</dt>
-            <dd className="text-right font-medium text-gray-900">{renderField(f.key, params)}</dd>
-          </div>
-        ))}
+        {FIELDS.map((f) => {
+          // ⭐ 必填项还空着时，在**这个格子本身**上说清楚 ——
+          //    它是"生成按钮为什么点不了"在页面上的答案，
+          //    而答案必须落在用户正在看的那个位置，不能只在按钮下面写一行小字。
+          const required = REQUIRED_FIELDS.includes(f.key)
+          const blank = missing.includes(f.key)
+          return (
+            <div key={f.key} className="flex items-start justify-between gap-3 text-sm">
+              <dt className="text-gray-500">
+                {f.label}
+                {required && (
+                  <span className="ml-0.5 text-amber-600" title="必填">
+                    *
+                  </span>
+                )}
+              </dt>
+              <dd className={'text-right font-medium ' + (blank ? 'text-amber-600' : 'text-gray-900')}>
+                {renderField(f.key, params)}
+              </dd>
+            </div>
+          )
+        })}
       </dl>
+      {/* 这句解释是必要的：不然"为什么有的格子带星、有的不带"就成了一个要猜的事。
+          同时它把"不填也能继续"明说出来 —— 隐含的可选项等于没有可选项。 */}
+      <p className="mt-3 text-[11px] leading-snug text-gray-400">
+        带 * 的五项必须填 —— 它们各自直接决定查什么、怎么排。
+        其余不想说就留空，系统按带娃出行的常规替你定。
+      </p>
     </div>
   )
 }
@@ -208,6 +295,134 @@ function renderField(key: keyof TravelParams, p: TravelParams): string {
   if (key === 'days') return `${v} 天`
   if (key === 'childAge') return `${v} 岁`
   return String(v)
+}
+
+/* ============================================================
+ * 生成中 —— 让那几十秒看得见
+ * ============================================================ */
+
+/**
+ * 生成行程时的面板。它替代的是原来那两句话。
+ *
+ * ── 原来那里是什么 ────────────────────────────────────────────
+ *   一句「正在生成（要几十秒）…」加一句「这一步要真的去查飞猪、再让模型排期，25~60 秒是正常的」。
+ *   那是全流程体验最差的一段：用户没有任何办法判断系统是在干活，还是已经卡死了。
+ *   **解释"为什么慢"，永远比不上让人看见它在动。**
+ *
+ * ── 三个刻意的取舍 ────────────────────────────────────────────
+ *
+ * ① **没有百分比，也没有一条会走到头的进度条。**
+ *    五步的耗时完全不可预测（模型那两段在 10~30 秒之间浮动），
+ *    任何"已完成 68%"都只能靠编 —— 而这个产品最不能出的错就是"看起来很像真的、其实是编的"。
+ *    所以这里只有一条**不确定态的扫光**，它的全部含义是"在动，但不知道还要多久"。
+ *    而已经走完的步骤、以及它们真实花了多少，照实显示 —— 那一部分是真的。
+ *
+ * ② **计时在前端自己算，不读后端的 elapsedMs。**
+ *    两者说的是同一件事，但前端每 0.5 秒自己跳一次、不用等轮询；
+ *    而轮询只要抖一下，读后端的数字就会**卡住不动** —— 那恰好是最像死机的样子。
+ *    从这里挂载那刻（≈ 点下按钮那刻）开始算，也才是用户真正感受到的等待时间。
+ *
+ * ③ **拿不到明细时也要有东西可看。** 轮询失败（后端忙、网络抖）不是错误，
+ *    面板退化成"一条扫光 + 一个真的在走的秒表"。这比一片空白好得多。
+ */
+function GeneratingPanel({ progress }: { progress: PlanProgress | null }) {
+  const [elapsedMs, setElapsedMs] = useState(0)
+
+  useEffect(() => {
+    const startedAt = Date.now()
+    const t = setInterval(() => setElapsedMs(Date.now() - startedAt), 500)
+    return () => clearInterval(t)
+  }, [])
+
+  const steps = progress?.steps ?? []
+
+  return (
+    <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-3">
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs font-medium text-gray-900">正在生成行程</span>
+        <span className="text-xs tabular-nums text-gray-500">
+          已用 {Math.floor(elapsedMs / 1000)} 秒
+        </span>
+      </div>
+
+      {/* 不确定态扫光。它不知道终点在哪 —— 这正是我们要表达的意思，不是没做完 */}
+      <div className="mt-2 h-1 overflow-hidden rounded-full bg-blue-100">
+        <div className="h-full w-1/3 animate-sweep rounded-full bg-blue-500" />
+      </div>
+
+      {steps.length > 0 ? (
+        <ol className="mt-3 space-y-1.5">
+          {steps.map((s) => (
+            <StepLine key={s.key} step={s} />
+          ))}
+        </ol>
+      ) : (
+        <p className="mt-3 text-xs text-gray-500">正在查飞猪，这一步要几十秒。</p>
+      )}
+
+      <p className="mt-2 text-[11px] leading-snug text-gray-400">
+        每步要花多久事先不知道，所以这里只说走到哪一步，不报百分比。
+      </p>
+    </div>
+  )
+}
+
+/**
+ * 面板里的一步。
+ *
+ * 四种状态**各有各的形状**（打勾 / 乘号 / 实心呼吸点 / 空心点），不靠颜色单独区分 ——
+ * 只靠颜色的话，色弱的人看到的就是"四个灰点里有一个稍微不同"。
+ */
+function StepLine({ step }: { step: PlanProgressStep }) {
+  return (
+    <li className="flex items-center gap-2 text-xs">
+      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center leading-none">
+        {step.state === 'DONE' && <span className="text-green-600">✓</span>}
+        {step.state === 'FAILED' && <span className="text-red-600">✕</span>}
+        {step.state === 'RUNNING' && (
+          <span className="h-2 w-2 animate-breathe rounded-full bg-blue-600" />
+        )}
+        {step.state === 'PENDING' && (
+          <span className="h-2 w-2 rounded-full border border-gray-300" />
+        )}
+      </span>
+
+      <span
+        className={
+          step.state === 'RUNNING'
+            ? 'truncate font-medium text-gray-900'
+            : step.state === 'DONE'
+              ? 'truncate text-gray-500'
+              : 'truncate text-gray-400'
+        }
+      >
+        {step.label}
+      </span>
+
+      {/* tookMs 为 null == 还没走完。**不能写成 `!step.tookMs`** —— 那样"耗时 0.0 秒"也会被当成没走完 */}
+      <span className="ml-auto shrink-0 tabular-nums text-gray-400">
+        {step.tookMs !== null
+          ? formatSeconds(step.tookMs)
+          : step.state === 'RUNNING'
+            ? '进行中'
+            : ''}
+      </span>
+    </li>
+  )
+}
+
+/**
+ * 毫秒 → 人能读的时长。
+ *
+ * 为什么给"不到 0.1 秒"单独一条：有的步骤（校验行程）真的是毫秒级的，
+ * 显示成 "0.0 秒" 会让人以为那一步压根没做 —— 而它做了。
+ * **"很快"和"没做"是两件事**，尤其在这套行程要拿去订酒店的场景里。
+ */
+function formatSeconds(ms: number): string {
+  if (ms < 100) return '不到 0.1 秒'
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} 秒`
+  const m = Math.floor(ms / 60_000)
+  return `${m} 分 ${Math.round((ms % 60_000) / 1000)} 秒`
 }
 
 /* ============================================================
