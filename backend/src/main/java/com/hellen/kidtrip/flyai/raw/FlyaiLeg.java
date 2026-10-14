@@ -3,7 +3,20 @@ package com.hellen.kidtrip.flyai.raw;
 import java.util.List;
 
 /**
- * `search-train` 返回的一条**往返方案**（不只是单程 —— 见下）。
+ * 一条**城际走法**：`search-train` 和 `search-flight` 都回这个形状。
+ *
+ * 名字从 `FlyaiTrain` 改过来的（2026-10-14 加机票时）—— 这里原本只服务火车，
+ * 而实测**机票返回的就是同一个结构、同一批字段名**（逐字相同，见下面那段），
+ * 所以再叫 Train 就是一句会误导人的名字：读代码的人会以为航班走的是另一条路。
+ * **一个类型服务两种载体时，名字不能站在其中一种那边。**
+ *
+ * ── 两个载体唯一的形状差异（实测 2026-10-14，深圳→上海）──────────
+ *   外层价格：火车叫 `price`、机票叫 `ticketPrice`（字段名不同，含义相同）。
+ *   所以这里**两个都声明**，"读哪个"由 {@code CandidateNormalizer.parsePrice} 决定 ——
+ *   而不是让上游的命名习惯漏到调用方（那会让"哪个字段是价格"变成每个调用方都要想一遍的问题）。
+ *   机票另外多一个 `tags`（本次实测恒为 null），不声明。
+ *   其余（`journeys` / `segments` / `totalDuration` / `jumpUrl` / `transportType`…）
+ *   两条链路**完全一致** —— 这就是没必要为机票再写一个 record 的理由。
  *
  * 实测结构（2026-10-13，`--origin 广州 --destination 珠海 --dep-date … --sort-type 4`）：
  * <pre>
@@ -36,17 +49,19 @@ import java.util.List;
  *    抛出的 NumberFormatException 会出现在"解析上游数据"这一层之外的某个地方，
  *    而且是一条会把整批结果带走的异常。镜子就是镜子。
  */
-public record FlyaiTrain(
+public record FlyaiLeg(
         List<Journey> journeys,
-        /** "70.00" —— 带 --back-date 时是**往返总价** */
+        /** "70.00" —— 火车的价格字段。带 --back-date 时是**往返总价** */
         String price,
+        /** "610.00" —— **机票**的价格字段。和 price 是同一样东西，只是上游换了个名字 */
+        String ticketPrice,
         /** 整条方案的时长（分钟字符串）。单程=去程时长；往返=两段之和 */
         String totalDuration,
         /** 飞猪的购票跳转链接 —— 演示时"点这里就能买"比任何文案都直接 */
         String jumpUrl
 ) {
 
-    public FlyaiTrain {
+    public FlyaiLeg {
         journeys = journeys == null ? List.of() : List.copyOf(journeys);
     }
 
@@ -83,13 +98,19 @@ public record FlyaiTrain(
             String arrDateTime,
             /** 这一段自己的耗时（分钟字符串）。中转时各段相加 ≠ totalDuration（还有候车） */
             String duration,
-            /** "动车" / "高铁" / "城际" */
+            /** "动车" / "高铁" / "城际"；机票是航司名（"深航"、"春秋"） */
             String marketingTransportName,
-            /** "D947" */
+            /** "D947"；机票是航班号（"ZH9529"）——**不带航司前缀**，要自己拼 */
             String marketingTransportNo,
-            /** "二等座" */
+            /** "二等座"；机票是舱位（"经济舱"） */
             String seatClassName,
-            /** "火车" */
+            /**
+             * **"火车" / "飞机"** —— 上游直接给了载体，不用按有没有 `stationShortName` 去猜。
+             *
+             * ⚠️ 但这一层**不用它**做任何判断（它是上游的镜子）。真正定载体的是
+             *    "我们查的是哪个子命令"（见 LegService）—— 因为那件事我们自己知道，
+             *    而且比下游字段更可靠（字段哪天变了，我们是不知道自己查了什么了吗？）
+             */
             String transportType
     ) {
     }

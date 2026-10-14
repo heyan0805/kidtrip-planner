@@ -1,7 +1,7 @@
 package com.hellen.kidtrip.candidate;
 
 import com.hellen.kidtrip.flyai.FlyaiException;
-import com.hellen.kidtrip.flyai.raw.FlyaiTrain;
+import com.hellen.kidtrip.flyai.raw.FlyaiLeg;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
@@ -75,7 +75,7 @@ class CandidateNormalizerTest {
 
     @Test
     @DisplayName("⭐⭐ 实测：车次查询的 status=1 +「行程时长过滤结果为空」→ NO_RESULT，不是 PARAM")
-    void trainNoMatchIsAConclusionNotAFailure() {
+    void serviceNoMatchIsAConclusionNotAFailure() {
         // 逐字抄自 2026-10-13 的实测响应：
         //   search-train --origin 珠海 --destination 桂林 --total-duration-hour 3
         // 它说的是一件**事实**：这两地之间没有 3 小时内的直达。
@@ -129,11 +129,11 @@ class CandidateNormalizerTest {
                    "jumpUrl":"https://router.feizhu.com/x"}
                 ]},"message":"success","status":0,"systemMessage":null}
                 """;
-        CandidateNormalizer.Normalized<FlyaiTrain> r = normalizer.trains(json);
+        CandidateNormalizer.Normalized<FlyaiLeg> r = normalizer.trains(json);
 
         assertEquals(1, r.items().size());
         assertEquals(0, r.failed());
-        FlyaiTrain train = r.items().get(0);
+        FlyaiLeg train = r.items().get(0);
         assertEquals("70.00", train.price());
         assertEquals("53", train.totalDuration());
         assertEquals(1, train.journeys().size());

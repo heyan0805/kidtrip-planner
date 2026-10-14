@@ -1,7 +1,7 @@
 package com.hellen.kidtrip.retrieval;
 
 import com.hellen.kidtrip.flyai.FlyaiProperties;
-import com.hellen.kidtrip.flyai.raw.FlyaiTrain;
+import com.hellen.kidtrip.flyai.raw.FlyaiLeg;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -33,27 +33,27 @@ class LegServiceTest {
      * ============================================================ */
 
     /** 一趟直达：单 segment，时间和站名都按实测的格式（空格分隔、带秒） */
-    private static FlyaiTrain direct(String depStation, String depAt, String arrStation, String arrAt,
+    private static FlyaiLeg direct(String depStation, String depAt, String arrStation, String arrAt,
                                      String duration, String price) {
-        return new FlyaiTrain(
-                List.of(new FlyaiTrain.Journey("直达", List.of(
+        return new FlyaiLeg(
+                List.of(new FlyaiLeg.Journey("直达", List.of(
                         segment(depStation, depAt, arrStation, arrAt, duration)), duration, "")),
-                price, duration, "https://router.feizhu.com/" + depStation);
+                price, null, duration, "https://router.feizhu.com/" + depStation);
     }
 
     /** 一趟中转：多个 segment，**第一段的到达站是中转站** */
-    private static FlyaiTrain transfer(String depStation, String depAt, String transferStation,
+    private static FlyaiLeg transfer(String depStation, String depAt, String transferStation,
                                        String arrivalStation, String arrAt, String duration) {
-        FlyaiTrain.Segment first = segment(depStation, depAt, transferStation, "2026-11-17 10:30:00", "55");
-        FlyaiTrain.Segment second = segment(transferStation, "2026-11-17 11:20:00", arrivalStation, arrAt, "120");
-        return new FlyaiTrain(
-                List.of(new FlyaiTrain.Journey("中转", List.of(first, second), duration, "25")),
-                "239.00", duration, "https://router.feizhu.com/transfer");
+        FlyaiLeg.Segment first = segment(depStation, depAt, transferStation, "2026-11-17 10:30:00", "55");
+        FlyaiLeg.Segment second = segment(transferStation, "2026-11-17 11:20:00", arrivalStation, arrAt, "120");
+        return new FlyaiLeg(
+                List.of(new FlyaiLeg.Journey("中转", List.of(first, second), duration, "25")),
+                "239.00", null, duration, "https://router.feizhu.com/transfer");
     }
 
-    private static FlyaiTrain.Segment segment(String depStation, String depAt, String arrStation, String arrAt,
+    private static FlyaiLeg.Segment segment(String depStation, String depAt, String arrStation, String arrAt,
                                               String duration) {
-        return new FlyaiTrain.Segment(
+        return new FlyaiLeg.Segment(
                 "广州", depStation + "站", depStation, depAt,
                 "珠海", arrStation + "站", arrStation, arrAt,
                 duration, "动车", "D947", "二等座", "火车");
@@ -68,12 +68,12 @@ class LegServiceTest {
     void outboundSkipsTooEarlyAndTooLate() {
         // 这三条是 2026-10-13 实测广州→珠海真实存在的班次（时长都是 53~56 分，所以上游按
         // 时长排序后它们的相对顺序就是返回顺序）。
-        List<FlyaiTrain> candidates = List.of(
+        List<FlyaiLeg> candidates = List.of(
                 direct("广州南", "2026-11-17 06:30:00", "珠海", "2026-11-17 07:26:00", "56", "70.00"),
                 direct("广州南", "2026-11-17 08:36:00", "珠海", "2026-11-17 09:29:00", "53", "70.00"),
                 direct("广州南", "2026-11-17 20:58:00", "珠海", "2026-11-17 21:53:00", "55", "70.00"));
 
-        FlyaiTrain chosen = LegService.pick(candidates, LegService.Direction.OUTBOUND);
+        FlyaiLeg chosen = LegService.pick(candidates, LegService.Direction.OUTBOUND);
 
         assertEquals("2026-11-17 08:36:00", chosen.journeys().get(0).segments().get(0).depDateTime(),
                 "06:30 出门对孩子太狠；20:58 出发等于第一天整天废掉");
@@ -85,11 +85,11 @@ class LegServiceTest {
         // 这是整层里最要紧的一条：返回 null 会被上层读成"这天没有交通"，
         // 而真相是"有车，只是时刻不理想"。用户看到的是"没有车次"——一句**假话**，
         // 而且他会因此放弃这趟行程。给一份真实但不理想的结果，永远比给一句干脆的错话好。
-        List<FlyaiTrain> overnight = List.of(
+        List<FlyaiLeg> overnight = List.of(
                 direct("广州南", "2026-11-17 02:00:00", "珠海", "2026-11-17 02:55:00", "55", "70.00"),
                 direct("广州南", "2026-11-17 23:30:00", "珠海", "2026-11-18 00:25:00", "55", "70.00"));
 
-        FlyaiTrain chosen = LegService.pick(overnight, LegService.Direction.OUTBOUND);
+        FlyaiLeg chosen = LegService.pick(overnight, LegService.Direction.OUTBOUND);
 
         assertEquals(overnight.get(0), chosen, "宁可给凌晨 2 点这班（真实的），也不能说'没有车'");
     }
@@ -99,11 +99,11 @@ class LegServiceTest {
     void inboundPrefersArrivingBeforeEvening() {
         // 回程两头都判：发车不能太早（最后一天还要玩），到达不能太晚（别把疲劳带到第二天）。
         // 这一组候选检的是**后一头** —— 18:13 那班在窗口内，23:40 那班超了上界。
-        List<FlyaiTrain> candidates = List.of(
+        List<FlyaiLeg> candidates = List.of(
                 direct("珠海", "2026-11-22 18:13:00", "广州南", "2026-11-22 19:03:00", "50", "70.00"),
                 direct("珠海", "2026-11-22 22:45:00", "广州南", "2026-11-22 23:40:00", "55", "70.00"));
 
-        FlyaiTrain chosen = LegService.pick(candidates, LegService.Direction.RETURN);
+        FlyaiLeg chosen = LegService.pick(candidates, LegService.Direction.RETURN);
 
         assertEquals("2026-11-22 19:03:00", chosen.journeys().get(0).segments().get(0).arrDateTime());
     }
@@ -118,12 +118,12 @@ class LegServiceTest {
         // 这正是"上界单独成立时必然失灵"的那个情形：列表按时长升序，"第一条满足的"由耗时决定，
         // 而短途线路上耗时最短的常常就是首班车 —— 结果规则表面在说"别太晚到家"，
         // 实际执行出来是"越早越好"。
-        List<FlyaiTrain> candidates = List.of(
+        List<FlyaiLeg> candidates = List.of(
                 direct("广州南", "2026-11-21 06:18:00", "深圳北", "2026-11-21 06:47:00", "29", "74.50"),
                 direct("广州南", "2026-11-21 14:16:00", "深圳北", "2026-11-21 14:45:00", "29", "74.50"),
                 direct("广州南", "2026-11-21 21:07:00", "深圳北", "2026-11-21 22:27:00", "80", "86.00"));
 
-        FlyaiTrain chosen = LegService.pick(candidates, LegService.Direction.RETURN);
+        FlyaiLeg chosen = LegService.pick(candidates, LegService.Direction.RETURN);
 
         assertEquals("2026-11-21 14:16:00", chosen.journeys().get(0).segments().get(0).depDateTime(),
                 "13:00 前发车等于最后一天上午全在赶路；22:27 才到家是把疲劳带去第二天");
@@ -134,11 +134,11 @@ class LegServiceTest {
     void inboundRejectsArrivingAfterEvening() {
         // 这两条也是实测的珠海→广州（2026-11-21）。补下界的时候很容易顺手把上界弱化掉，
         // 而"别太晚到家"是回程最初的那条理由，不能被新加的下界挤走。
-        List<FlyaiTrain> candidates = List.of(
+        List<FlyaiLeg> candidates = List.of(
                 direct("珠海", "2026-11-21 19:10:00", "广州南", "2026-11-21 20:05:00", "55", "70.00"),
                 direct("珠海", "2026-11-21 17:55:00", "广州南", "2026-11-21 18:50:00", "55", "70.00"));
 
-        FlyaiTrain chosen = LegService.pick(candidates, LegService.Direction.RETURN);
+        FlyaiLeg chosen = LegService.pick(candidates, LegService.Direction.RETURN);
 
         assertEquals("2026-11-21 17:55:00", chosen.journeys().get(0).segments().get(0).depDateTime(),
                 "20:05 进门，洗漱完就 21 点多了");
@@ -150,11 +150,11 @@ class LegServiceTest {
         // 小城市之间的线路一天可能只有几班早车，这时"没有一班落在窗口里"是**结论**，
         // 但正确动作不是返回 null —— 上层会把它显示成"没有车次"，而那是一句假话，
         // 用户会因此放弃一趟其实能走的行程。
-        List<FlyaiTrain> morningOnly = List.of(
+        List<FlyaiLeg> morningOnly = List.of(
                 direct("桂林西", "2026-11-19 07:20:00", "广州南", "2026-11-19 09:24:00", "124", "223.00"),
                 direct("桂林西", "2026-11-19 08:50:00", "广州南", "2026-11-19 10:54:00", "124", "223.00"));
 
-        FlyaiTrain chosen = LegService.pick(morningOnly, LegService.Direction.RETURN);
+        FlyaiLeg chosen = LegService.pick(morningOnly, LegService.Direction.RETURN);
 
         assertEquals(morningOnly.get(0), chosen, "真实但不理想，永远好过一句干脆的错话");
     }
@@ -162,7 +162,7 @@ class LegServiceTest {
     @Test
     @DisplayName("时刻读不出来的条目不参与时段判断，但不该因此把整批都丢掉")
     void unreadableTimeIsSkippedNotFatal() {
-        List<FlyaiTrain> mixed = List.of(
+        List<FlyaiLeg> mixed = List.of(
                 direct("广州南", null, "珠海", null, "53", "70.00"),
                 direct("广州南", "2026-11-17 09:06:00", "珠海", "2026-11-17 10:00:00", "54", "70.00"));
 
@@ -192,7 +192,7 @@ class LegServiceTest {
     @Test
     @DisplayName("⭐ 跨午夜的到达一律不合格（'次日 07:03 到' ≠ '当天 07:03 到'）")
     void overnightArrivalIsNeverAcceptable() {
-        FlyaiTrain overnight = direct("上海虹桥", "2026-11-25 20:15:00",
+        FlyaiLeg overnight = direct("上海虹桥", "2026-11-25 20:15:00",
                 "深圳北", "2026-11-26 07:03:00", "648", "668.00");
 
         assertFalse(LegService.acceptable(overnight, LegService.Direction.RETURN),
@@ -204,7 +204,7 @@ class LegServiceTest {
     void sameDayButLateIsStillRejected() {
         // 补"跨午夜"这一条时最容易顺手做的事，是把 RETURN_ARRIVE_BY 弱化掉（"反正日期管着了"）。
         // 这两条判断管的是两件不同的事：日期管"是不是第二天"，上界管"当天是不是太晚"。
-        FlyaiTrain late = direct("上海虹桥", "2026-11-25 15:10:00",
+        FlyaiLeg late = direct("上海虹桥", "2026-11-25 15:10:00",
                 "深圳北", "2026-11-25 21:40:00", "390", "668.00");
 
         assertFalse(LegService.acceptable(late, LegService.Direction.RETURN), "21:40 到家太晚了");
@@ -217,9 +217,9 @@ class LegServiceTest {
     void overnightDoesNotWinOverAProperAfternoonTrain() {
         // 列表按时长升序，所以"第一条"未必是最短的那班。
         // 这里故意把夜车放第一个，模拟它排在候选最前面的情形。
-        FlyaiTrain overnight = direct("上海虹桥", "2026-11-25 20:15:00",
+        FlyaiLeg overnight = direct("上海虹桥", "2026-11-25 20:15:00",
                 "深圳北", "2026-11-26 07:03:00", "648", "668.00");
-        FlyaiTrain afternoon = afternoonTrain("14:30:00", "19:50:00");
+        FlyaiLeg afternoon = afternoonTrain("14:30:00", "19:50:00");
 
         assertEquals(afternoon, LegService.pick(List.of(overnight, afternoon), LegService.Direction.RETURN),
                 "白天有一班合格的，就不该给用户一趟夜车");
@@ -228,7 +228,7 @@ class LegServiceTest {
     @Test
     @DisplayName("只剩夜车可选 → 兜底仍然把它给出去（真实好过一句错话），但它只是兜底")
     void overnightIsStillGivenWhenItIsTheOnlyOption() {
-        FlyaiTrain overnight = direct("上海虹桥", "2026-11-25 20:15:00",
+        FlyaiLeg overnight = direct("上海虹桥", "2026-11-25 20:15:00",
                 "深圳北", "2026-11-26 07:03:00", "648", "668.00");
 
         assertEquals(overnight, LegService.pick(List.of(overnight), LegService.Direction.RETURN),
@@ -238,7 +238,7 @@ class LegServiceTest {
     }
 
     /** 一趟同日下午到的车：发车 ≥ 13:00、到达 ≤ 20:00，正是回程窗口想要的那种 */
-    private static FlyaiTrain afternoonTrain(String depAt, String arrAt) {
+    private static FlyaiLeg afternoonTrain(String depAt, String arrAt) {
         return direct("上海虹桥", "2026-11-25 " + depAt, "深圳北", "2026-11-25 " + arrAt, "320", "668.00");
     }
 
@@ -252,10 +252,10 @@ class LegServiceTest {
         // 实测的中转形状：珠海 → 广州南（换乘）→ 桂林西。
         // 如果图省事写 segments.get(0)，用户会看到"珠海→广州南"——
         // 一份把他送到了中转站就结束的行程，而且**不报错**。
-        FlyaiTrain train = transfer("珠海", "2026-11-17 17:55:00", "广州南",
+        FlyaiLeg train = transfer("珠海", "2026-11-17 17:55:00", "广州南",
                 "桂林西", "2026-11-17 21:18:00", "203");
 
-        Transfer t = LegService.toTransfer(train, "珠海", "桂林");
+        Transfer t = LegService.toTransfer(train, "珠海", "桂林", TransportMode.TRAIN);
 
         assertEquals("珠海", t.depStation(), "上车站在第一段");
         assertEquals("桂林西", t.arrStation(), "⭐ 下车站在**最后一段**，不是第一段的到达站");
@@ -270,7 +270,7 @@ class LegServiceTest {
     void directHasNoTransferCity() {
         Transfer t = LegService.toTransfer(
                 direct("广州南", "2026-11-17 08:36:00", "珠海", "2026-11-17 09:29:00", "53", "70.00"),
-                "广州", "珠海");
+                "广州", "珠海", TransportMode.TRAIN);
 
         assertTrue(t.direct());
         assertNull(t.transferCity(), "直达是'没有中转站'，不是'中转站名字是空的' —— 前者只有一个表示法");
@@ -278,7 +278,7 @@ class LegServiceTest {
         assertEquals("珠海", t.arrStation());
         assertEquals(53, t.durationMinutes());
         assertEquals(70.0, t.priceYuan());
-        assertEquals("动车D947", t.trainNo(), "车型 + 编号要拼好 —— 单看 D947 分不出高铁还是动车");
+        assertEquals("动车D947", t.serviceNo(), "车型 + 编号要拼好 —— 单看 D947 分不出高铁还是动车");
         assertEquals("二等座", t.seatClass());
         assertEquals("广州", t.from());
         assertEquals("珠海", t.to());
@@ -289,15 +289,15 @@ class LegServiceTest {
     void missingPriceIsNull() {
         assertNull(LegService.toTransfer(
                 direct("广州南", "2026-11-17 08:36:00", "珠海", "2026-11-17 09:29:00", "53", null),
-                "广州", "珠海").priceYuan());
+                "广州", "珠海", TransportMode.TRAIN).priceYuan());
     }
 
     @Test
     @DisplayName("journeys 为空的脏数据 → 返回 null，不抛异常（上游偶尔会回这种）")
     void emptyJourneysYieldsNullNotCrash() {
-        FlyaiTrain broken = new FlyaiTrain(List.of(), "70.00", "53", null);
+        FlyaiLeg broken = new FlyaiLeg(List.of(), "70.00", null, "53", null);
 
-        assertNull(LegService.toTransfer(broken, "广州", "珠海"));
+        assertNull(LegService.toTransfer(broken, "广州", "珠海", TransportMode.TRAIN));
     }
 
     /* ============================================================
@@ -330,10 +330,10 @@ class LegServiceTest {
         // 23:30 发、次日 00:25 到。如果契约里只存时刻，"00:25" 会被前端画成
         // "凌晨就到了"——比出发还早。这就是 Transfer 里那个 depDateTime / arrDateTime
         // 为什么必须**带日期**（而 TravelDay 拒绝冗余字段的理由在这件事上不成立）。
-        FlyaiTrain overnight = direct("广州南", "2026-11-17 23:30:00", "珠海", "2026-11-18 00:25:00",
+        FlyaiLeg overnight = direct("广州南", "2026-11-17 23:30:00", "珠海", "2026-11-18 00:25:00",
                 "55", "70.00");
 
-        Transfer t = LegService.toTransfer(overnight, "广州", "珠海");
+        Transfer t = LegService.toTransfer(overnight, "广州", "珠海", TransportMode.TRAIN);
 
         assertEquals("2026-11-17T23:30", t.depDateTime());
         assertEquals("2026-11-18T00:25", t.arrDateTime(), "日期必须跟着跨过去");
@@ -402,7 +402,7 @@ class LegServiceTest {
     @Test
     @DisplayName("⭐ 真正发出去的参数带的是窗口，不是那条上限")
     void argsCarryTheWindowNotTheLimit() {
-        List<String> args = LegService.args("深圳", "上海", "2026-11-17", LegService.searchWindowHours(180));
+        List<String> args = LegService.args(TransportMode.TRAIN, "深圳", "上海", "2026-11-17", LegService.searchWindowHours(180));
 
         int i = args.indexOf("--total-duration-hour");
         assertTrue(i >= 0, "这个参数不能丢 —— 它是服务端粗筛，少了就白拿一堆超长车次");
@@ -421,11 +421,11 @@ class LegServiceTest {
     void overLimitStillYieldsTheFastestTrain() {
         // 实测形状：深圳 → 上海只找得到 6 小时以上的车，而上限是 180 分钟。
         // 老行为是返回 NO_EDGE —— 用户看到"没有直达车次"（假话），行程里也没有交通那一行。
-        List<FlyaiTrain> allTooLong = List.of(
+        List<FlyaiLeg> allTooLong = List.of(
                 direct("深圳北", "2026-11-17 08:00:00", "上海虹桥", "2026-11-17 14:40:00", "400", "680.00"),
                 direct("深圳北", "2026-11-17 09:15:00", "上海虹桥", "2026-11-17 16:05:00", "410", "680.00"));
 
-        LegService.Leg leg = LegService.overLimitOrNone("深圳", "上海", "flyai search-train",
+        LegService.Leg leg = LegService.overLimitOrNone("深圳", "上海", "flyai search-train", TransportMode.TRAIN,
                 12, 180, allTooLong, LegService.Direction.OUTBOUND);
 
         assertEquals(LegService.Outcome.FOUND, leg.outcome(), "有车就是有车 —— 报成'没有走法'是假话");
@@ -438,7 +438,7 @@ class LegServiceTest {
     @Test
     @DisplayName("一条候选都没有 → NO_EDGE（这时候'没有走法'才是真的）")
     void noCandidatesIsNoEdge() {
-        LegService.Leg leg = LegService.overLimitOrNone("深圳", "上海", "flyai search-train",
+        LegService.Leg leg = LegService.overLimitOrNone("深圳", "上海", "flyai search-train", TransportMode.TRAIN,
                 12, 180, List.of(), LegService.Direction.OUTBOUND);
 
         assertEquals(LegService.Outcome.NO_EDGE, leg.outcome());
@@ -451,9 +451,9 @@ class LegServiceTest {
     @Test
     @DisplayName("候选是 journeys 为空的脏数据 → NO_EDGE，而不是给一个字段全空的 Transfer")
     void brokenCandidateFallsBackToNoEdge() {
-        List<FlyaiTrain> broken = List.of(new FlyaiTrain(List.of(), "680.00", "400", null));
+        List<FlyaiLeg> broken = List.of(new FlyaiLeg(List.of(), "680.00", null, "400", null));
 
-        LegService.Leg leg = LegService.overLimitOrNone("深圳", "上海", "flyai search-train",
+        LegService.Leg leg = LegService.overLimitOrNone("深圳", "上海", "flyai search-train", TransportMode.TRAIN,
                 12, 180, broken, LegService.Direction.OUTBOUND);
 
         assertEquals(LegService.Outcome.NO_EDGE, leg.outcome(),
@@ -523,5 +523,105 @@ class LegServiceTest {
     void blankOriginRejected() {
         assertThrows(IllegalArgumentException.class,
                 () -> guardOnly().search("  ", "珠海", "2026-11-17", LegService.Direction.OUTBOUND));
+    }
+
+    /* ============================================================
+     * 飞机 —— 同一条路换载体，规矩一个字没改
+     * ============================================================ */
+
+    /** 一个航班：形状和火车**逐字相同**，只有价格字段和几个名字不一样（2026-10-14 实测） */
+    private static FlyaiLeg flight(String airline, String no, String depStation, String depAt,
+                                   String arrStation, String arrAt, String duration, String ticketPrice) {
+        return new FlyaiLeg(
+                List.of(new FlyaiLeg.Journey("直达", List.of(new FlyaiLeg.Segment(
+                        "深圳", depStation + "机场", depStation, depAt,
+                        "上海", arrStation + "机场", arrStation, arrAt,
+                        duration, airline, no, "经济舱", "飞机")), duration, "")),
+                // ⚠️ 机票的 price 是 null、ticketPrice 才有值 —— 这正是实测的形状
+                null, ticketPrice, duration, "https://router.feizhu.com/flight");
+    }
+
+    @Test
+    @DisplayName("⭐ 航班的参数：**不发** --total-duration-hour（上游 400 拒绝），改发 --journey-type 1")
+    void flightArgsDropTheDurationFilterAndKeepDirectOnly() {
+        List<String> args = LegService.args(TransportMode.FLIGHT, "深圳", "上海", "2026-12-10",
+                LegService.searchWindowHours(180));
+
+        assertEquals("search-flight", args.get(0), "查的是航班，不是车次");
+        assertFalse(args.contains("--total-duration-hour"),
+                "这个参数对机票会被上游 400 拒绝（Argument not allowed: [totalDurationHour]）—— "
+                        + "--help 里列着它，但服务端不认。时长红线只能本地判");
+        assertEquals("1", args.get(args.indexOf("--journey-type") + 1),
+                "只留直达：不筛的话池子里混着 630 分钟的经停航班，而且最便宜的那条往往最慢");
+        assertEquals("4", args.get(args.indexOf("--sort-type") + 1),
+                "时长升序不能丢 —— pick 靠'第一条'拿最快的，不排就全错");
+        assertEquals("2026-12-10", args.get(args.indexOf("--dep-date") + 1));
+    }
+
+    @Test
+    @DisplayName("火车的参数照旧（两条路分叉，但不能把火车那条带歪）")
+    void trainArgsStillCarryTheWindow() {
+        List<String> args = LegService.args(TransportMode.TRAIN, "深圳", "上海", "2026-12-10", 12);
+
+        assertEquals("search-train", args.get(0));
+        assertEquals("12", args.get(args.indexOf("--total-duration-hour") + 1));
+        assertFalse(args.contains("--journey-type"), "火车这边从来不需要它，加了反而是新变量");
+    }
+
+    @Test
+    @DisplayName("⭐ 航班的票价在 ticketPrice 里（火车是 price）—— 读错字段只会静默变成'票价未知'")
+    void flightPriceComesFromTicketPrice() {
+        Transfer t = LegService.toTransfer(
+                flight("深航", "ZH9501", "宝安", "2026-12-10 08:20:00",
+                        "虹桥", "2026-12-10 10:25:00", "125", "610.00"),
+                "深圳", "上海", TransportMode.FLIGHT);
+
+        assertEquals(610.0, t.priceYuan(), "写成 leg.price() 不会报错，只会让所有航班都显示'票价未知'");
+        assertEquals(125, t.durationMinutes());
+        assertEquals("深航ZH9501", t.serviceNo(), "航司名 + 航班号要拼好 —— 单看 ZH9501 看不出是哪家");
+        assertEquals("经济舱", t.seatClass());
+        assertEquals("宝安", t.depStation(), "机场短名，就是上游的 stationShortName");
+        assertEquals("虹桥", t.arrStation());
+        assertEquals(TransportMode.FLIGHT, t.mode(), "载体要显式带上，界面才知道换图标");
+    }
+
+    @Test
+    @DisplayName("机票的 price 为空串（而不是 null）时也要能读到 ticketPrice")
+    void flightPriceToleratesBlankPrice() {
+        FlyaiLeg blank = new FlyaiLeg(
+                List.of(new FlyaiLeg.Journey("直达", List.of(new FlyaiLeg.Segment(
+                        "深圳", "宝安机场", "宝安", "2026-12-10 08:20:00",
+                        "上海", "虹桥机场", "虹桥", "2026-12-10 10:25:00",
+                        "125", "深航", "ZH9501", "经济舱", "飞机")), "125", "")),
+                "  ", "610.00", "125", null);
+
+        assertEquals(610.0, LegService.toTransfer(blank, "深圳", "上海", TransportMode.FLIGHT).priceYuan(),
+                "空串不是'没有价格'，只是上游填了个空 —— 该往后看 ticketPrice");
+    }
+
+    @Test
+    @DisplayName("⭐ 说'没有航班'时不能提 12 小时 —— 那个窗口是火车的动作，机票根本没发过")
+    void flightNoEdgeReasonDoesNotClaimAWindow() {
+        assertFalse(LegService.noEdgeReason(TransportMode.FLIGHT, 12).contains("12"),
+                "机票没发 --total-duration-hour，说'12 小时内没有'就是编了一个我们没做过的动作");
+        assertTrue(LegService.noEdgeReason(TransportMode.TRAIN, 12).contains("12"),
+                "火车那边 12 确实是我们发出去的窗口，必须说清楚");
+    }
+
+    @Test
+    @DisplayName("航班的时长红线也在本地判（上游不筛），超了就照旧'给出 + 标记 overLimit'")
+    void flightOverLimitStillYieldsTheFastestFlight() {
+        // 4 小时的经停航班，上限 180 分钟 —— 和火车走的是同一段代码
+        List<FlyaiLeg> allTooLong = List.of(
+                flight("春秋", "9C8888", "宝安", "2026-12-10 08:00:00",
+                        "浦东", "2026-12-10 12:00:00", "240", "900.00"));
+
+        LegService.Leg leg = LegService.overLimitOrNone("深圳", "上海", "flyai search-flight",
+                TransportMode.FLIGHT, 12, 180, allTooLong, LegService.Direction.OUTBOUND);
+
+        assertEquals(LegService.Outcome.FOUND, leg.outcome());
+        assertTrue(leg.overLimit());
+        assertEquals(240, leg.transfer().durationMinutes());
+        assertEquals(TransportMode.FLIGHT, leg.transfer().mode());
     }
 }

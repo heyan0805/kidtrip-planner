@@ -169,7 +169,9 @@ public final class PlanAssembler {
             // PlanService 排完之后统一补上（见 PlanService.attachLegs）。
             // 让它在这里留 null 而不是顺手传一个占位对象，是为了让"这一天还没有交通信息"
             // 和"这一天不需要交通"在数据上分得开 —— 前者会被编排层填掉，后者不会被。
-            days.add(new TravelDay(i + 1, theme, spots, null,
+            // alternatives 给空 list（不是 null）：备选走法和交通本身同时由编排层填，
+            // 这里给 null 就得让每个读它的地方都判一次空。
+            days.add(new TravelDay(i + 1, theme, spots, null, List.of(),
                     stay.hotel() == null ? null : toStay(stay.hotel(), stay.tips())));
         }
 
@@ -206,7 +208,7 @@ public final class PlanAssembler {
                     // 住宿那栏照旧带上 —— 补排的是"白天去哪"，和"晚上住哪"是两件事，
                     // 顺手把住宿也清掉会凭空抹掉模型排好的连住。
                     // 交通那栏同理带上：它跟"白天去哪"更没关系。
-                    days.set(i, new TravelDay(d.day(), FILLED_THEME, filled, d.transfer(), d.hotel()));
+                    days.set(i, new TravelDay(d.day(), FILLED_THEME, filled, d.transfer(), d.alternatives(), d.hotel()));
                 }
             }
         }

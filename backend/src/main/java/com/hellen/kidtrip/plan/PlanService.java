@@ -12,6 +12,7 @@ import com.hellen.kidtrip.retrieval.RetrievalRequest;
 import com.hellen.kidtrip.retrieval.RetrievalResult;
 import com.hellen.kidtrip.retrieval.RetrievalService;
 import com.hellen.kidtrip.retrieval.Transfer;
+import com.hellen.kidtrip.retrieval.TransportMode;
 import com.hellen.kidtrip.rule.PlanRules;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -377,28 +378,36 @@ public class PlanService {
         //    而"模型排出了几天"是我们这边的中间结果 —— 让中间结果决定返程日期是本末倒置。
         LocalDate end = start.plusDays(tripDays(params) - 1);
 
-        Transfer outbound = searchLeg(params.origin(), params.city(), start, LegService.Direction.OUTBOUND,
-                "出发地到目的地", queries, warnings);
-        Transfer inbound = searchLeg(params.city(), params.origin(), end, LegService.Direction.RETURN,
-                "目的地回出发地", queries, warnings);
+        Legs.Options outbound = searchLeg(params.origin(), params.city(), start,
+                LegService.Direction.OUTBOUND, "出发地到目的地", queries, warnings);
+        Legs.Options inbound = searchLeg(params.city(), params.origin(), end,
+                LegService.Direction.RETURN, "目的地回出发地", queries, warnings);
         return new Legs(outbound, inbound);
     }
 
-    /** 只做"挂"这件事。查在 searchLegs 里 —— 依赖不同（那边只依赖画像，这边依赖排出来的天） */
+    /**
+     * 只做"挂"这件事。查在 searchLegs 里 —— 依赖不同（那边只依赖画像，这边依赖排出来的天）
+     *
+     * ⚠️ 备选走法**只在它被查出来的那一段**上挂。判断依据是"from/to 和这一段一致"，
+     *    不靠"第 1 天 / 最后一天"推断 —— 那两条规则只在单城市行程下成立
+     *    （和 TravelDay 里为什么不放 `nights` 是同一条理由）。
+     */
     private List<TravelDay> attachLegs(List<TravelDay> days, Legs legs) {
         if (days.isEmpty() || !legs.hasAny()) {
             // 没问到出发地是最常见的分支，不该为它付一次 list 拷贝
             return days;
         }
         List<TravelDay> withLegs = new ArrayList<>(days);
-        if (legs.outbound() != null) {
+        if (legs.outbound().primary() != null) {
             TravelDay first = days.get(0);
-            withLegs.set(0, new TravelDay(first.day(), first.theme(), first.spots(), legs.outbound(), first.hotel()));
+            withLegs.set(0, new TravelDay(first.day(), first.theme(), first.spots(),
+                    legs.outbound().primary(), legs.outbound().alternatives(), first.hotel()));
         }
-        if (legs.inbound() != null) {
+        if (legs.inbound().primary() != null) {
             int last = days.size() - 1;
             TravelDay day = days.get(last);
-            withLegs.set(last, new TravelDay(day.day(), day.theme(), day.spots(), legs.inbound(), day.hotel()));
+            withLegs.set(last, new TravelDay(day.day(), day.theme(), day.spots(),
+                    legs.inbound().primary(), legs.inbound().alternatives(), day.hotel()));
         }
         return withLegs;
     }
@@ -440,11 +449,13 @@ public class PlanService {
         if (days.isEmpty()) {
             return;
         }
-        String start = firstDayConflict(days.get(0), legs.outbound());
+        // ⚠️ 只拿 **primary** 校（见 Legs.Options）：这一天的安排就是按它排的，
+        //    拿备选走法去校会报出一堆"你其实没选的那班车"的假警告。
+        String start = firstDayConflict(days.get(0), legs.outboundTransfer());
         if (start != null) {
             warnings.add(start);
         }
-        String end = lastDayConflict(days.get(days.size() - 1), legs.inbound());
+        String end = lastDayConflict(days.get(days.size() - 1), legs.inboundTransfer());
         if (end != null) {
             warnings.add(end);
         }
@@ -708,11 +719,11 @@ public class PlanService {
      *
      * @return 只有 FOUND 时非 null —— 调用方据此决定"这一天有没有交通信息"
      */
-    private Transfer searchLeg(String from, String to, LocalDate date, LegService.Direction direction,
-                               String role, List<String> queries, List<String> warnings) {
-        LegService.Leg leg;
+    private Legs.Options searchLeg(String from, String to, LocalDate date, LegService.Direction direction,
+                                   String role, List<String> queries, List<String> warnings) {
+        LegService.Leg train;
         try {
-            leg = legService.search(from, to, date.toString(), direction);
+            train = legService.search(from, to, date.toString(), direction);
         } catch (IllegalArgumentException | FlyaiException e) {
             // 走到这里说明是**我们自己**的判定拒绝了这次查询（城市名不合法之类），
             // 而不是上游的问题。它也绝不能让整份行程失败 —— 画像里的城市名在 /generate
@@ -726,31 +737,176 @@ public class PlanService {
             //    结果就是画像里写了个「广东周边」当出发地时，整个 /generate 报 500。
             //    （这是这个工程里第 N 次同一个形状的坑：**错的不是判断，是抓的那一层。**）
             warnings.add(role + "的车次没能查（" + e.getMessage() + "），行程里没有交通信息");
+            return Legs.Options.empty();
+        }
+        queries.add(train.query());
+
+        switch (train.outcome()) {
+            // ⭐ **超限也要挂上。** "太长"是值得说的一句话，但绝不是"把车藏起来"的理由 ——
+            //    藏起来用户连"要坐多久"都看不到，就更谈不上自己做决定了。
+            case FOUND -> {
+                if (train.overLimit()) {
+                    warnOverLimit(role, train.transfer(), warnings);
+                }
+            }
+            // 这是上游给出的**结论**，不是我们的推断 —— 所以可以直接写死这句话。
+            case NO_EDGE -> warnNoEdge(role, from, to, train.detail(), warnings);
+            // ⚠️ 千万不能说成"没有车次"。话里必须带"没查成"三个字的意思。
+            case UPSTREAM_ERROR -> warnings.add(role + "的车次这次没查成（" + train.detail()
+                    + "），行程本身没问题，只是交通那一行缺着 —— 稍后重新生成一次就会补上");
+        }
+
+        // ── 火车这条腿走不顺时，顺手问一次飞机（2026-10-14）──────────────────
+        // 触发条件只有"我们已经知道火车这条路不行"这一种（见 wantsFlight 的注释）：
+        // 每一次上游调用都是额度，而"要不要看飞机"这件事，先由那条 180 分钟的红线
+        // 替我们筛掉了绝大多数情况（短途本来就不需要飞机这个备选）。
+        // ⚠️ 注意它**只查一次**：去程一节、回程一节，没有"再查一个中转航班"这种事。
+        LegService.Leg flight = wantsFlight(train)
+                ? searchFlight(from, to, date, direction, role, queries)
+                : null;
+
+        Legs.Options options = optionsOf(train, flight);
+        warnFlightAlternative(role, train, options, warnings);
+        return options;
+    }
+
+    /**
+     * 这一次要不要**额外**花一次调用去问飞机。
+     *
+     * 只有两种情况：
+     *   ① 火车有，但最快的一班也超了上限（overLimit）—— 正是用户会想"那我坐飞机呢"的那一刻；
+     *   ② 火车**根本没有**走法（NO_EDGE）—— 这一段路本来就指望不上火车。
+     *
+     * ⚠️ `UPSTREAM_ERROR` **故意不在里面**。这不是抠门，是判据必须站得住：
+     *    查询失败说明**我们不知道火车行不行**，而"不知道"既不能推出"这段路很长"，
+     *    也不能推出"该给个备选"。这时候多查一次飞机，要么是白花钱（路其实很短），
+     *    要么更糟 —— 给出一份"只有飞机"的交通行，而真实的火车可能又快又便宜。
+     *    那时用户看到的是"这段路只有飞机"，而正确的话是"车次这次没查成，重生成一次就会补上"。
+     *    （把"不知道"说成一个结论，是这个工程反复踩的那类错。）
+     *
+     * 抽成 static 纯函数是为了能被单测钉住：**这条规则决定花不花钱**，
+     * 而它的两个判据（overLimit / NO_EDGE）都不是随手写的。
+     */
+    static boolean wantsFlight(LegService.Leg train) {
+        if (train == null) {
+            return false;
+        }
+        return train.outcome() == LegService.Outcome.NO_EDGE
+                || (train.outcome() == LegService.Outcome.FOUND && train.overLimit());
+    }
+
+    /**
+     * 把"火车 + 飞机"两个各自独立的查询结果，合成一段路的**一组走法**。
+     *
+     * ── 谁是主选：**火车优先，但火车走不通时飞机顶上来** ──────────────
+     *   火车有（哪怕超限）→ 主选是火车。理由：超限只是"超出了我们替他设的默认上限"，
+     *     不是"不能坐"，而且火车票便宜、准点、站点在市区 —— 用户大概率还是要坐它。
+     *     飞机这时是备选（进 alternatives，界面上并排显示，谁也不替谁做决定）。
+     *   火车没有 / 没查成 → **飞机当主选**。这不是"飞机更好"，是因为
+     *     排程需要"这一天几点到"这个事实，而飞机是我们手里唯一的真实时刻。
+     *     没有它，第 1 天就只能按"一般情况 09:00 开始"排 —— 那正是 B7 要修的那个瞎排问题。
+     *
+     * ⚠️ 两个都没查到 → primary 为 null，且 alternatives 为空。
+     *    调用方据此知道"这一段什么都没有"（和"有一段飞机"必须分得开）。
+     *
+     * 纯函数（不碰网络、不碰配置）—— 这是本轮唯一一条"产品判断"，
+     * 所以它必须能被单测直接钉住，而不是埋在编排流程里。
+     */
+    static Legs.Options optionsOf(LegService.Leg train, LegService.Leg flight) {
+        Transfer trainTransfer = transferOf(train);
+        Transfer flightTransfer = transferOf(flight);
+        if (trainTransfer != null) {
+            return new Legs.Options(trainTransfer,
+                    flightTransfer == null ? List.of() : List.of(flightTransfer));
+        }
+        return new Legs.Options(flightTransfer, List.of());
+    }
+
+    /** 只有 FOUND 才有一个能挂上去的 Transfer；其余三种结局（含没查过）都是 null */
+    private static Transfer transferOf(LegService.Leg leg) {
+        return leg != null && leg.outcome() == LegService.Outcome.FOUND ? leg.transfer() : null;
+    }
+
+    /**
+     * 飞机这一次查询**不写警告**，只记账。
+     *
+     * 和火车那三条路（FOUND / NO_EDGE / UPSTREAM_ERROR 全都要说话）的区别在于：
+     * 火车是**用户一定会遇到**的那一行，所以它每一种状态都得说清；而飞机是"我们多看一眼"，
+     * 看不着并不改变任何已给出的结论（火车那句话已经说完了），
+     * 多说一句"顺带查的航班没查到"只会让 warnings 变长而没有可行动的信息。
+     * 真正的故障仍然进得了日志（见下），排障不受影响。
+     *
+     * ⚠️ 唯一必须说的情况是"**飞机成了主选**"—— 那已经不是备选了，
+     *    这一天的时间安排是按它排的，用户必须知道。（所以这里有 warnFlightAlternative 那个判断。）
+     */
+    private LegService.Leg searchFlight(String from, String to, LocalDate date,
+                                        LegService.Direction direction, String role,
+                                        List<String> queries) {
+        try {
+            LegService.Leg leg = legService.searchFlight(from, to, date.toString(), direction);
+            // 失败也记在 queries 里 —— 溯源面板要的是"真实发出过哪些命令"，
+            // 而一次失败的调用同样花了额度（上游是按请求计的）。
+            queries.add(leg.query());
+            return leg;
+        } catch (IllegalArgumentException | FlyaiException e) {
+            log.info("{} 的航班这一次没查成（{}）—— 不影响已经给出的火车信息", role, e.getMessage());
             return null;
         }
-        queries.add(leg.query());
+    }
 
-        return switch (leg.outcome()) {
-            case FOUND -> {
-                // ⭐ **超限也要挂上。** "太长"是值得说的一句话，但绝不是"把车藏起来"的理由 ——
-                //    藏起来用户连"要坐多久"都看不到，就更谈不上自己做决定了。
-                if (leg.overLimit()) {
-                    warnOverLimit(role, leg.transfer(), warnings);
-                }
-                yield leg.transfer();
+    /**
+     * 查到飞机时，把这件事说出来 —— 而且**说清它是什么、不是什么**。
+     *
+     * 三句话缺一不可：
+     *   ① 它是**查询当时**的价格（实测同一条航线 11-17 与 12-10 差 2.5 倍，浮动比火车大得多）；
+     *   ② `durationMinutes` 是**纯飞行时间**，机场还要提前到 —— 不说这句，用户会把
+     *      "2 小时"当成门到门时间，于是拿它和火车的 6 小时直接比（那是两种口径）；
+     *   ③ **我们不替他判断划不划算**。价格浮动大到这个程度，任何"飞机更值"的自动结论
+     *      都是在拿一个会飘的数字替他做决定。
+     *
+     * 只在真的查到飞机时才说 —— 查不到、查不成都不说（见 searchFlight 的注释）。
+     */
+    private static void warnFlightAlternative(String role, LegService.Leg train,
+                                              Legs.Options options, List<String> warnings) {
+        Transfer flight = null;
+        for (Transfer alt : options.alternatives()) {
+            if (alt.mode() == TransportMode.FLIGHT) {
+                flight = alt;
             }
-            case NO_EDGE -> {
-                // 这是上游给出的**结论**，不是我们的推断 —— 所以可以直接写死这句话。
-                warnNoEdge(role, from, to, leg.detail(), warnings);
-                yield null;
-            }
-            case UPSTREAM_ERROR -> {
-                // ⚠️ 千万不能说成"没有车次"。话里必须带"没查成"三个字的意思。
-                warnings.add(role + "的车次这次没查成（" + leg.detail()
-                        + "），行程本身没问题，只是交通那一行缺着 —— 稍后重新生成一次就会补上");
-                yield null;
-            }
-        };
+        }
+        boolean isPrimary = flight == null && options.primary() != null
+                && options.primary().mode() == TransportMode.FLIGHT;
+        if (isPrimary) {
+            flight = options.primary();
+        }
+        if (flight == null) {
+            return;
+        }
+        boolean noTrain = train != null && train.outcome() == LegService.Outcome.NO_EDGE;
+        warnings.add(role + (noTrain ? "这段路没有直达火车，但可以飞：" : "这段路也可以飞：")
+                + describeLeg(flight)
+                + "，纯飞行 " + humanMinutes(flight.durationMinutes())
+                + "（机场还要提前 1.5~2 小时到，进门出门的时间比这个数字长得多），"
+                + flightPrice(flight)
+                + (isPrimary
+                    // 飞机成了主选时，"要不要坐"就不是个可选项了 —— 我们要让用户知道
+                    // 行程当天的时间是**按这班航班**排的。
+                    ? "—— 行程第 1 天的开始和最后一天的收尾都是按这班航班排的"
+                    : "—— 要不要改坐飞机由你定，我们不做划不划算的判断"));
+    }
+
+    /** "票价 ¥610"；取不到价时说"票价未知"，**绝不写 ¥0** */
+    private static String flightPrice(Transfer flight) {
+        return flight.priceYuan() == null
+                ? "票价未知（当时没查到）"
+                : "票价 ¥" + trimYuan(flight.priceYuan()) + "（查询当时的参考价，机票浮动比火车大）";
+    }
+
+    /** 610.0 → "610"；610.5 → "610.5"。价格是给人看的，不要拖一个 ".0" */
+    private static String trimYuan(double yuan) {
+        return yuan == Math.floor(yuan) && !Double.isInfinite(yuan)
+                ? String.valueOf((long) yuan)
+                : String.valueOf(yuan);
     }
 
     /**
@@ -773,17 +929,18 @@ public class PlanService {
      * 以及这条线在哪儿调。少任何一个，用户就只能干瞪眼。
      */
     private void warnOverLimit(String role, Transfer t, List<String> warnings) {
-        warnings.add(role + "这段路带娃偏累：" + t.from() + " 到 " + t.to()
-                + " 最快的一班也要 " + humanMinutes(t.durationMinutes())
-                + "（" + describeTrain(t) + "）—— 超过单段 " + legService.limitMinutes()
+        warnings.add(role + "这段路带娃偏累：火车最快的" + t.from() + " 到 " + t.to()
+                + " 一班也要 " + humanMinutes(t.durationMinutes())
+                + "（" + describeLeg(t) + "）—— 超过单段 " + legService.limitMinutes()
                 + " 分钟这条上限。这趟车仍然安排在行程里，你可以照它订票；"
                 + "觉得这条线该放宽或收紧，改 application.yaml 的 max-leg-minutes");
     }
 
-    /** "高铁G99 08:00 广州南 → 14:40 上海虹桥" —— 说得出是哪一班，用户才能自己去核对 */
-    private static String describeTrain(Transfer t) {
-        return (t.trainNo() == null ? "车次" : t.trainNo())
-                + " " + clock(t.depDateTime()) + " " + t.depStation()
+    /** "高铁G99 08:00 广州南 → 14:40 上海虹桥" / "深航ZH9501 08:20 宝安 → 10:25 虹桥"
+     *  —— 说得出是哪一班，用户才能自己去核对 */
+    private static String describeLeg(Transfer t) {
+        String no = t.serviceNo() == null ? (t.mode() == null ? "班次" : t.mode().label()) : t.serviceNo();
+        return no + " " + clock(t.depDateTime()) + " " + t.depStation()
                 + " → " + clock(t.arrDateTime()) + " " + t.arrStation();
     }
 

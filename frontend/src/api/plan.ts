@@ -115,6 +115,23 @@ function trimNoise(raw: string): string {
   return raw.replace(/[玩逛游乐去到的了呀吧呢啊，,。.！!？?、\s]+$/u, '')
 }
 
+/**
+ * "3" → "03"、"3"（数字）也 → "03"。日期要凑成 ISO 的定长形状（后端是按这个形状解析的）。
+ *
+ * ⚠️ 签名写成 `string | number` 而不是 `string`，是被一次真实故障逼出来的：
+ *    下面那个"过去的日期就顺延明年"的比较要用**今天**的年月日，
+ *    而 `now.getMonth() + 1` / `now.getDate()` 是**数字** —— 只收 string 的话
+ *    会在运行时报 `raw.padStart is not a function`。
+ *    这类错误还有个更坏的性质：它只在**"只说月日、且要跟今天比"**这条分支上炸，
+ *    结果是"11 月 17 日出发"永远抠不出来、生成按钮永远是灰的 ——
+ *    而假数据这条路本来就是为了出事那天能顶上去（见下面 mockChat 里的那段注释）。
+ *    参数类型放宽到这里（而不是在调用处补 `.toString()`）：调用处有三处，
+ *    补在调用处就还得记住"下次新增一处也要补"。
+ */
+function pad2(raw: string | number): string {
+  return String(raw).padStart(2, '0')
+}
+
 async function mockChat(req: PlanChatRequest): Promise<PlanChatData> {
   await delay(300)
 
@@ -140,6 +157,35 @@ async function mockChat(req: PlanChatRequest): Promise<PlanChatData> {
     if (m) patch.origin = trimNoise(m[1])
   }
   if (patch.days == null && /天/.test(text) && nums[0]) patch.days = nums[0]
+
+  // ── 孩子年龄："6 岁" ────────────────────────────────────────────
+  // ⚠️ 这两段（年龄、日期）是 2026-10-14 补的，原因很具体：
+  //    "生成行程"按钮在**五项必填**（出发地/目的地/天数/出发日期/孩子年龄）齐了之后才可点，
+  //    而这份假数据原来只抠得出城市和天数 —— 于是降级路上按钮**永远是灰的**：
+  //    后端一挂，用户看到的是一个打不开功能的界面。而降级路存在的全部意义
+  //    就是"出事那天还能演示"，一个点不动的按钮等于这条退路也没了。
+  const age = /(\d+)\s*岁/.exec(text)
+  if (patch.childAge == null && age) patch.childAge = Number(age[1])
+
+  // ── 出发日期：ISO（2026-10-24）/ 中文（11月17日）/ 短横（11-17）──
+  // 年份的规矩和真实后端的 TravelDates 一致：**只说月日就按今年，过去了就顺延到明年**。
+  // 这不是抄来的细节 —— 它是"过去的日期在飞猪那边会被直接拒绝"那条实测的落点
+  // （见 application 里那份画像审计），假数据不该给出一个真实链路会拒绝的值。
+  if (!patch.startDate) {
+    const iso = /(\d{4})-(\d{1,2})-(\d{1,2})/.exec(text)
+    const cn = /(\d{1,2})\s*月\s*(\d{1,2})\s*[日号]/.exec(text)
+    const dashed = /(?:^|[^\d])(\d{1,2})-(\d{1,2})(?:[^\d]|$)/.exec(text)
+    const now = new Date()
+    if (iso) {
+      patch.startDate = `${iso[1]}-${pad2(iso[2])}-${pad2(iso[3])}`
+    } else if (cn || dashed) {
+      const [m, d] = cn ? [cn[1], cn[2]] : [dashed![1], dashed![2]]
+      // 先按今年算；要是已经过去了，就顺延一年 —— 和 TravelDates.normalize 同一条规矩
+      const thisYear = `${now.getFullYear()}-${pad2(m)}-${pad2(d)}`
+      const passed = new Date(`${thisYear}T00:00:00`) < new Date(`${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())}T00:00:00`)
+      patch.startDate = passed ? `${now.getFullYear() + 1}-${pad2(m)}-${pad2(d)}` : thisYear
+    }
+  }
 
   const missing = MOCK_FIELDS.filter((f) => {
     const v = patch[f.key]
@@ -169,21 +215,62 @@ async function mockChat(req: PlanChatRequest): Promise<PlanChatData> {
  *    留着它们对不上就成了字段级自相矛盾。
  */
 const MOCK_TRANSFER_FIELDS = {
+  mode: 'TRAIN',
   depStation: '广州南',
   arrStation: '珠海',
   depDateTime: '2026-11-17T08:36',
   arrDateTime: '2026-11-17T09:29',
   durationMinutes: 53,
   priceYuan: 70,
-  trainNo: '动车D947',
+  serviceNo: '动车D947',
   seatClass: '二等座',
   direct: true,
   transferCity: null,
-  jumpUrl: null,
-}
+  // ⚠️ 两条交通的 jumpUrl 都是 **`.invalid` 占位域名**，这不是偷懒。
+  //    `jumpUrl` 是整份假数据里唯一"不能编得像真的"的字段：时刻/时长/票价编错了还能靠
+  //    "这是假的"兜住，而一个看起来正常的飞猪链接点过去会落到**别的航班**上 ——
+  //    用户以为自己在看这一班，其实是另一班，而且他不会察觉。
+  //    （`.invalid` 是 RFC 2606 保留 TLD，永不解析，一眼看得出是占位。）
+  //    为什么不是干脆留 null：留 null 的话 `TransferLine` 里那个"去飞猪看这趟车"的
+  //    分支在**降级路上永远不会被渲染** —— 而降级路存在的全部理由就是"出事那天还能演示"，
+  //    少演示一个分支等于那段代码在无后端时从未被验证过。这和酒店那条
+  //    `bookUrl: 'https://example.invalid/mock'` 是同一条规矩。
+  jumpUrl: 'https://example.invalid/mock-train',
+} as const
 
 function mockOutbound(origin: string, city: string): Transfer {
   return { from: origin, to: city, ...MOCK_TRANSFER_FIELDS }
+}
+
+/**
+ * 备选走法（飞机）的假数据。
+ *
+ * ⚠️ 它和上面那套火车数字**不是同一条路的换算**，而是一班**真实存在过的航班**的形状：
+ *    2026-12-10 深圳→上海 深航 ZH9501 08:20 宝安 → 10:25 虹桥，125 分钟，¥610（实测）。
+ *    借它的形状是因为它同时体现了三件必须渲染出来的事：机场短名（宝安/虹桥）、
+ *    纯飞行时长（125 分）、以及一个和火车完全不同量级的票价。
+ *    城市名跟着 params 走 —— 和"站名时间故意不跟着 params 变"那条规矩一致：
+ *    能变的只有纯标识字段，时刻不能编。
+ */
+function mockInboundFlight(origin: string, city: string): Transfer {
+  return {
+    from: city,
+    to: origin,
+    mode: 'FLIGHT',
+    depStation: '宝安',
+    arrStation: '虹桥',
+    // 回程日刻意和 mockInbound 同一天（11-22），否则两行并排看会像两段不同的路
+    depDateTime: '2026-11-22T08:20',
+    arrDateTime: '2026-11-22T10:25',
+    durationMinutes: 125,
+    priceYuan: 610,
+    serviceNo: '深航ZH9501',
+    seatClass: '经济舱',
+    direct: true,
+    transferCity: null,
+    // 同上：`.invalid` 占位，只为让「查这个航班」这个分支在降级路上真的渲染出来。
+    jumpUrl: 'https://example.invalid/mock-flight',
+  }
 }
 
 function mockInbound(origin: string, city: string): Transfer {
@@ -245,6 +332,12 @@ async function mockPlan(req: PlanGenerateRequest): Promise<TravelPlan> {
       // 为什么假数据也要还原这个形状：界面上"这天没有交通"和"交通信息缺失"是两个分支，
       // 形状不对的话，没起后端的时候永远看不到其中一个 —— 而那正是最容易写错的那个。
       transfer: i === 0 ? mockOutbound(origin, city) : i === days - 1 ? mockInbound(origin, city) : null,
+      // 备选走法：**回程刻意给一条航班**，为的是"主选 + 备选"这条渲染路径
+      // 在没起后端的时候也能被看到 —— 否则它只在真后端查出一条长腿时才出现，
+      // 而那正是最不容易复现的场景（要真实上游查得到、还得恰好超限）。
+      // 数字同样取实测：2026-12-10 深圳→上海 深航 ZH9501 08:20→10:25，¥610（深圳→上海是反面例子，
+      // 这里只是借那班航班的**形状**，城市名跟着 params 走 —— 和上面那套广州↔珠海的规矩一致）。
+      alternatives: i === days - 1 ? [mockInboundFlight(origin, city)] : [],
       hotel: {
         name: '（假数据）示例酒店',
         hotelId: 'mock-hotel-1',

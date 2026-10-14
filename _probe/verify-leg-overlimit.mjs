@@ -79,15 +79,15 @@ const intercity = ORIGIN !== CITY
 
 check(!intercity || outbound !== null,
   '⭐ 去程有车票信息（这就是用户报的"没有车票信息"）',
-  outbound ? `${outbound.trainNo ?? '?'} ${outbound.depStation}→${outbound.arrStation}` : '(空 —— 又丢了)')
+  outbound ? `${outbound.serviceNo ?? '?'} ${outbound.depStation}→${outbound.arrStation}` : '(空 —— 又丢了)')
 check(!intercity || inbound !== null,
   '⭐ 回程有车票信息',
-  inbound ? `${inbound.trainNo ?? '?'} ${inbound.depStation}→${inbound.arrStation}` : '(空 —— 又丢了)')
+  inbound ? `${inbound.serviceNo ?? '?'} ${inbound.depStation}→${inbound.arrStation}` : '(空 —— 又丢了)')
 
 /* ── ③ 两段各自：耗时是真的、方向是对的 ───────────────────────── */
 for (const [role, t] of [['去程', outbound], ['回程', inbound]]) {
   if (!t) continue
-  console.log(`\n  [${role}] ${t.trainNo ?? '?'}  ${t.depDateTime} ${t.depStation} → ${t.arrDateTime} ${t.arrStation}  ${t.durationMinutes} 分钟  ¥${t.priceYuan ?? '未知'}`)
+  console.log(`\n  [${role}] ${t.serviceNo ?? '?'}  ${t.depDateTime} ${t.depStation} → ${t.arrDateTime} ${t.arrStation}  ${t.durationMinutes} 分钟  ¥${t.priceYuan ?? '未知'}`)
 
   check(t.from === (role === '去程' ? ORIGIN : CITY) && t.to === (role === '去程' ? CITY : ORIGIN),
     `${role} from/to 方向对得上画像`,

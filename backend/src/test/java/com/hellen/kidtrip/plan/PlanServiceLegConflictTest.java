@@ -1,6 +1,7 @@
 package com.hellen.kidtrip.plan;
 
 import com.hellen.kidtrip.retrieval.Transfer;
+import com.hellen.kidtrip.retrieval.TransportMode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -38,18 +39,18 @@ class PlanServiceLegConflictTest {
     }
 
     private static TravelDay day(TravelSpot... spots) {
-        return new TravelDay(1, "当天主题", List.of(spots), null, null);
+        return new TravelDay(1, "当天主题", List.of(spots), null, List.of(), null);
     }
 
     /** 实测：深圳→广州 11-17，10:10 发、10:39 到广州南（29 分钟） */
     private static Transfer arrivingAt(String arr) {
-        return new Transfer("深圳", "广州", "深圳北", "广州南",
+        return new Transfer("深圳", "广州", TransportMode.TRAIN, "深圳北", "广州南",
                 "2026-11-17T10:10", arr, 29, 74.5, "高铁G390", "二等座", true, null, null);
     }
 
     /** 实测：广州→深圳 11-21 有这一班（14:16 发、14:45 到） */
     private static Transfer departingAt(String dep) {
-        return new Transfer("广州", "深圳", "广州南", "深圳北",
+        return new Transfer("广州", "深圳", TransportMode.TRAIN, "广州南", "深圳北",
                 dep, "2026-11-21T14:45", 29, 74.5, "高铁G1005", "二等座", true, null, null);
     }
 

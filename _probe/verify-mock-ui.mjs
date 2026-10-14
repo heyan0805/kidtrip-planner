@@ -81,6 +81,11 @@ try {
   // 和后端验收脚本用**同一句原文**：这样两条路走的是同一个场景，能直接对照
   await send('我们广州出发，想带孩子去珠海玩')
   await send('大概 3 天吧，孩子 6 岁')
+  // ⚠️ 第三轮是 2026-10-14 补的，而且它本身也是一条断言（见下面"五项必填"那几条）：
+  //    "生成行程"按钮要**五项必填**齐了才可点，而假数据原来只抠得出城市和天数 ——
+  //    少这一轮的话按钮永远是灰的，整套降级路验收会在点击那一步超时。
+  //    场景本身没变（还是广州→珠海 3 天），只是把画像补完整。
+  await send('11 月 17 日出发')
 
   const profile = await readProfile()
   console.log('      画像：', JSON.stringify(profile))
@@ -90,6 +95,18 @@ try {
   check(profile['目的地'] === '珠海',
     '目的地抠出来是"珠海"而不是"珠海玩"',
     `目的地=${profile['目的地']} —— 尾字没削干净的话这里会是"珠海玩"`)
+  // ⭐ 「生成行程」按钮的可点条件（五项必填）在**降级路上也必须能被满足**。
+  //    这一条是 2026-10-14 补的，因为当时发现：假数据只抠得出城市和天数，
+  //    于是后端一挂、按钮永远是灰的 —— 降级路存在的意义就是"出事那天还能演示"，
+  //    一个点不动的按钮等于这条退路也没了。所以这里验的不是"抠得准"，
+  //    而是"**五项凑得齐**"（缺任何一项，下面那次 click 就会超时）。
+  const filled = Object.entries(profile).filter(([, v]) => v && v !== '待确认')
+  check(profile['孩子年龄'] === '6 岁' && profile['出发日期'] === '2026-11-17',
+    '⭐ 假数据也能把「孩子年龄」和「出发日期」抠出来（否则按钮永远是灰的）',
+    JSON.stringify(profile))
+  check(filled.length >= 5,
+    `⭐ 必填的五项都齐了（现在有 ${filled.length} 项有值）—— 缺一项就点不动生成`,
+    JSON.stringify(profile))
 
   await page.click('button:has-text("生成行程")')
   await page.waitForFunction(() => !document.body.innerText.includes('正在生成'), null, {
@@ -111,6 +128,56 @@ try {
     '换一个假数字，就会让"时长合不合理"这件事在没起后端时失去校准')
   check((cards.at(-1)?.text ?? '').includes('广州南'),
     '最后一天也有回程（方向是反的）')
+
+  /* ── ②c ⭐ 备选走法（机票）在界面上是什么样 ─────────────────── */
+  // 为什么这一条要放进来：机票那一行只在"火车这条腿偏累"时才出现，
+  // 而那需要**真实上游恰好查得到一条长腿**——现场最不容易复现的场景，
+  // 所以它恰恰是最该有一条不需要后端就能跑到的渲染验收。
+  // 假数据里第 1 天没有备选、最后一天有：两个分支都能被看到。
+  const lastDay = cards.at(-1)?.text ?? ''
+  console.log('')
+  console.log('【机票备选】备选走法那一行的渲染')
+  check(!day1.includes('也可以飞'),
+    '第 1 天没有备选行（假数据里只有回程挂了航班）—— 没有就别画，别让它变成每张卡片都有的装饰',
+    day1.slice(0, 160))
+  check(lastDay.includes('也可以飞'),
+    '⭐ 最后一天出现了「也可以飞」这一行',
+    lastDay.slice(0, 200))
+  check(lastDay.includes('深航ZH9501') && lastDay.includes('宝安') && lastDay.includes('虹桥'),
+    '航班号与机场短名都画出来了（不能只画城市名 —— 宝安/浦东是两回事）',
+    '机场名丢了的话用户没法判断"这班是从哪儿飞的"')
+  check(lastDay.includes('飞行 2 小时 5 分'),
+    '⭐ 时长前面带「飞行」两个字（纯飞行时间 ≠ 门到门时间，不加这个前缀会被当成全程）',
+    lastDay.slice(0, 240))
+  check(lastDay.includes('¥610'),
+    '票价画出来了（读数来自 ticketPrice 那一支）')
+  check(lastDay.includes('票价是查询当时的'),
+    '⭐ 明说了"票价是查询当时的，机票会浮动"（实测同一条线隔一个月差 2.5 倍）')
+  check(lastDay.includes('查这个航班'),
+    '有飞猪链接（备选也要能直接买，不能只摆着看）')
+  // ⭐ 但那个链接**必须指向一个一眼看得出是占位的域名**。
+  //    2026-10-14 补：原来假数据的 jumpUrl 是 null，于是这条分支在降级路上压根不渲染 ——
+  //    改 `.invalid` 占位域名之后它才真的被画出来，那时候才有必要盯住"它指向哪里"。
+  //    `jumpUrl` 是整份假数据里唯一不能编得像真的的字段：时刻编错了有"这是假的"兜着，
+  //    而一个看起来正常的飞猪链接会把人带到**别的航班**上，且他不会察觉。
+  const altLink = await page.$$eval('article', (els) => {
+    const last = els[els.length - 1]
+    const a = [...(last?.querySelectorAll('a') ?? [])].find((x) =>
+      x.textContent.includes('查这个航班'),
+    )
+    return a ? { href: a.getAttribute('href') ?? '' } : null
+  })
+  check(altLink?.href.includes('example.invalid') === true,
+    '⭐ 链接指向的是 `.invalid` 占位域名（假数据绝不编一个像真的飞猪链接）',
+    `实际 href=${altLink?.href}`)
+  // 顺序：主选 → 备选 → 住宿。备选讲的是"怎么到"，必须紧挨着主选，
+  // 排到住宿后面就变成一条和"今晚住哪"混在一起的注释了。
+  const iTrain = lastDay.indexOf('🚄')
+  const iAlt = lastDay.indexOf('也可以飞')
+  const iHotel = lastDay.indexOf('🏨')
+  check(iTrain >= 0 && iAlt > iTrain && (iHotel < 0 || iAlt < iHotel),
+    '⭐ 顺序是"主选 → 备选 → 住宿"（备选紧跟主选，不越过住宿那条线）',
+    `🚄@${iTrain} 备选@${iAlt} 🏨@${iHotel}`)
 
   /* ── ②b ⭐ 「换一个」在降级路上也得能用 ─────────────────────── */
   // 理由和第 ② 条同源：这份假数据存在的意义是"出事那天顶上去"，

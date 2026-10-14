@@ -4,6 +4,7 @@ import com.hellen.kidtrip.candidate.PoiCandidate;
 import com.hellen.kidtrip.plan.Legs;
 import com.hellen.kidtrip.plan.TravelParams;
 import com.hellen.kidtrip.retrieval.Transfer;
+import com.hellen.kidtrip.retrieval.TransportMode;
 import com.hellen.kidtrip.rule.PlanRules;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -49,9 +50,9 @@ class PlanComposerTest {
     }
 
     private static Transfer leg(String from, String to, String depStation, String arrStation,
-                                String dep, String arr, Integer minutes, String trainNo) {
-        return new Transfer(from, to, depStation, arrStation, dep, arr,
-                minutes, 74.5, trainNo, "二等座", true, null, "https://router.feizhu.com/x");
+                                String dep, String arr, Integer minutes, String serviceNo) {
+        return new Transfer(from, to, TransportMode.TRAIN, depStation, arrStation, dep, arr,
+                minutes, 74.5, serviceNo, "二等座", true, null, "https://router.feizhu.com/x");
     }
 
     /** 深圳 → 广州，5 天，和实测那份出问题的画像一样 */
@@ -61,8 +62,8 @@ class PlanComposerTest {
 
     private static Legs realLegs() {
         return new Legs(
-                leg("深圳", "广州", "深圳北", "广州南", "2026-11-17T10:10", "2026-11-17T10:39", 29, "高铁G390"),
-                leg("广州", "深圳", "广州南", "深圳北", "2026-11-21T14:16", "2026-11-21T14:45", 29, "高铁G1005"));
+                new Legs.Options(leg("深圳", "广州", "深圳北", "广州南", "2026-11-17T10:10", "2026-11-17T10:39", 29, "高铁G390"), List.of()),
+                new Legs.Options(leg("广州", "深圳", "广州南", "深圳北", "2026-11-21T14:16", "2026-11-21T14:45", 29, "高铁G1005"), List.of()));
     }
 
     /* ============================================================
@@ -99,8 +100,8 @@ class PlanComposerTest {
     @DisplayName("只查到一段时就只写一段（不替另一段编时刻）")
     void renderLegsRendersOnlyWhatItHas() {
         String text = PlanComposer.renderLegs(new Legs(
-                leg("深圳", "广州", "深圳北", "广州南", "2026-11-17T10:10", "2026-11-17T10:39", 29, "高铁G390"),
-                null));
+                new Legs.Options(leg("深圳", "广州", "深圳北", "广州南", "2026-11-17T10:10", "2026-11-17T10:39", 29, "高铁G390"), List.of()),
+                Legs.Options.empty()));
 
         assertTrue(text.contains("去程："), text);
         assertFalse(text.contains("回程："), "另一段没查到就该没有 —— 补一个假的比空着坏得多：" + text);

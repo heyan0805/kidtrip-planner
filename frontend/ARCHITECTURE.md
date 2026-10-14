@@ -1,7 +1,7 @@
 # 童行 · 带娃旅游规划器 —— 前端代码说明
 
 > 对象：本仓库的 `frontend/`（Vite + React 19 + TypeScript）
-> 结论先行：**9 个源文件（2140 行，其中 36% 是注释），零路由、零状态库、零测试框架。
+> 结论先行：**9 个源文件（2847 行，其中约 40% 是注释），零路由、零状态库、零测试框架。
 > 整个 `src/` 里只有一处 `fetch`。**
 
 ---
@@ -14,7 +14,7 @@
 | 有几个页面 | 1 个 |
 | 路由 | **没有**。没装 router，源码里零处路由用法 |
 | 状态管理 | **没有库**。两层：一个自定义 hook（业务状态）+ 组件内 `useState`（界面状态） |
-| HTTP | 一处 `fetch`，在 `src/api/http.ts:188`。其余全部走它包出来的 `request<T>()` |
+| HTTP | 一处 `fetch`，在 `src/api/http.ts:197`。其余全部走它包出来的 `request<T>()` |
 | 测试 | **0 个**，也没装测试框架 |
 
 这不是"做了简化"，而是这条产品决策的直接结果：整条流程是**单向一次性的**
@@ -44,15 +44,15 @@ frontend/
    ├─ index.css                   2 行   三行 @tailwind 指令
    ├─ types/
    │  ├─ flyai.ts                131 行  飞猪 FlyAI 的**原始返回形状**（第三方形状）
-   │  └─ plan.ts                 454 行  我们自己的契约（前后端共享的领域类型）
+   │  └─ plan.ts                 529 行  我们自己的契约（前后端共享的领域类型）
    ├─ api/
-   │  ├─ http.ts                 240 行  唯一 HTTP 出口（协议、超时、Mock 降级）
-   │  └─ plan.ts                 247 行  两个业务接口 + 各自的假数据
+   │  ├─ http.ts                 249 行  唯一 HTTP 出口（协议、超时、Mock 降级）
+   │  └─ plan.ts                 377 行  两个业务接口 + 进度轮询 + 各自的假数据
    ├─ hooks/
-   │  └─ usePlanChat.ts          349 行  对话状态机（前端**全部**业务状态在这里）
+   │  └─ usePlanChat.ts          539 行  对话状态机（前端**全部**业务状态在这里）
    └─ pages/
       └─ TravelPlanner/
-         └─ index.tsx            702 行  唯一页面 + 5 个局部组件 + 8 个纯函数（顶层共 16 个声明）
+         └─ index.tsx            1003 行  唯一页面 + 8 个局部组件 + 10 个纯函数（顶层共 21 个声明）
 ```
 
 ### 1.1 分层依据：按"变化的原因"切，不按"文件类型"切
@@ -77,7 +77,8 @@ frontend/
 
 **③ 没有 `components/` 目录**
 
-全部 5 个子组件（`ProfileCard` / `PlanView` / `DayCard` / `SpotRow` / `TransferLine`）
+全部 8 个子组件（`ProfileCard` / `GeneratingPanel` / `StepLine` / `PlanView` / `DayCard` /
+`SpotRow` / `TransferLine` / `AlternativeLine`）
 都是 `pages/TravelPlanner/index.tsx` 里的**局部函数**，只有 `TravelPlanner` 一个 `export default`。
 理由是它们都是"这一页专用"的：`DayCard` 换个页面就没有意义。
 **只有当第二个页面需要同一个组件时，才把它搬到 `components/`。** 现在没有第二个页面。
@@ -179,7 +180,7 @@ grep -iE "redux|zustand|jotai|recoil|mobx|react-query|swr" package.json   # → 
 规矩一句话：**能被两个组件看见的状态才进 hook；只在一个人手里的，留在 `useState`。**
 判据是"谁需要知道它"，不是"它重不重要"。
 
-### 3.3 `usePlanChat` 内部：8 个 state + 4 个 ref
+### 3.3 `usePlanChat` 内部：9 个 state + 6 个 ref
 
 | 名字 | 类型 | 作用 |
 |---|---|---|
@@ -190,9 +191,11 @@ grep -iE "redux|zustand|jotai|recoil|mobx|react-query|swr" package.json   # → 
 | `error` | `string \| null` | 一句能给用户看的话 |
 | `mockNotice` | `string \| null` | "正在用假数据"的提示 |
 | `swaps` | `SpotEdits` | 用户手动换过的点（稀疏覆盖，见 3.4③） |
+| `progress` | `PlanProgress \| null` | 生成到第几步了（每秒轮询拿回来的，见第 4 节「进度接口」） |
 | `messagesRef` / `paramsRef` | `useRef` | 上面两个 state 的**镜像**（见 3.4①） |
 | `inFlight` | `useRef<boolean>` | **并发闸门**（见 3.4②） |
 | `abortRef` | `useRef<AbortController>` | 卸载/重置时取消在飞的请求 |
+| `pollTimer` / `pollBusy` | `useRef` | 进度轮询的定时器与"上一拍还没回来"的闸门（见第 4 节「进度接口」） |
 
 对外返回 9 个状态 + 2 个派生值（`canGenerate` / `missingFields`）+ 5 个方法
 （`sendRound` / `generate` / `swapSpot` / `restoreSpot` / `reset`），共 16 个键 ——
@@ -288,7 +291,7 @@ const days = applySwaps(plan.days, swaps)   // 渲染时才叠加
   └─ usePlanChat() 里的 chat.sendRound / chat.generate
        └─ api/plan.ts   chatPlan() / generatePlan()      ← 路径、超时、假数据
             └─ api/http.ts   request<T>()                 ← 协议、超时、Mock 降级、错误分类
-                 └─ fetch()                               ← 全工程唯一一处（http.ts:188）
+                 └─ fetch()                               ← 全工程唯一一处（http.ts:197）
 ```
 
 ### 4.2 `api/http.ts` —— 唯一出口
@@ -432,8 +435,10 @@ fetch → vite proxy → 后端 8003
 
 chat.generate()
    │  setPlan(null) + setSwaps({})（旧行程的手动改动必须跟着旧行程一起消失）
+   │  生成一个 runId → 塞进请求头 X-Run-Id，同时 startPolling(runId)
    ▼
 generatePlan({ params })  →  request<TravelPlan>('/plan/generate')  →  后端
+   │   ↺ 每秒 GET /plan/progress/{runId} → setProgress（五步流水线，见第 4 节）
    ▼
 TravelPlan { summary, days[], warnings[], provenance, spotPool[] }
    │
@@ -441,6 +446,7 @@ TravelPlan { summary, days[], warnings[], provenance, spotPool[] }
    │     ├─ 画像卡之上：summary + "查了 N 轮飞猪 / 命中 / 可用 / 耗时"
    │     ├─ warnings → 黄色「注意事项」
    │     ├─ 每天一张 DayCard：点 + TransferLine + 酒店行
+   │     │  （同一段路还有别的走法时，主选下面多一行 AlternativeLine —— 目前只可能是飞机）
    │     ├─ 每个点一个 SpotRow：「换一个」（alternativesFor 每天算一次）
    │     └─ <details> 账本：真实发出的查询命令 + 被筛掉的候选
    └─► spotPool 是「换一个」的候选来源（含已排进日程的点，切片由前端做）
@@ -450,7 +456,7 @@ TravelPlan { summary, days[], warnings[], provenance, spotPool[] }
 
 ## 6. 建议的读代码顺序
 
-从**形状**读到**逻辑**，别从页面开始（页面里 36% 是 JSX 和 `className`，容易劝退）：
+从**形状**读到**逻辑**，别从页面开始（页面那 1003 行里大半是 JSX 和 `className`，容易劝退）：
 
 1. `src/types/plan.ts` —— **只看前 130 行**（`Message` / `TravelParams` / `PlanChatRequest` / `RetrievalPlan`）。
    先知道"数据长什么样"，后面全是它的搬运和渲染。
@@ -458,23 +464,26 @@ TravelPlan { summary, days[], warnings[], provenance, spotPool[] }
 3. `src/api/plan.ts` —— 只有两个函数，一分钟看完。
 4. `src/hooks/usePlanChat.ts` —— **最值得花时间的一站**。3.4 的三个难点都在这里。
 5. `src/pages/TravelPlanner/index.tsx` —— 前四步走完再看。
-   16 个顶层声明 = **6 个组件**（页面本身 + 5 个局部）+ **8 个纯函数** + 2 个常量。
-   那 8 个纯函数（`renderField` / `alternativesFor` / `distanceKm` / `centroid` /
-   `formatKm` / `hhmm` / `formatDuration` / `mergeStays`）可以单独读，它们不碰任何 React 概念。
+   21 个顶层声明 = **9 个组件**（页面本身 + 8 个局部）+ **10 个纯函数** + 2 个常量。
+   那 10 个纯函数（`missingLabels` / `renderField` / `formatSeconds` / `alternativesFor` /
+   `distanceKm` / `centroid` / `formatKm` / `hhmm` / `formatDuration` / `mergeStays`）
+   可以单独读，它们不碰任何 React 概念。
 
 ---
 
 ## 7. 与后端契约的关系（哪些是"镜像"）
 
-`types/plan.ts` 导出了 20 个类型，但**被应用代码真正 import 的只有 10 个**：
+`types/plan.ts` 导出了 21 个类型（外加一个常量 `DEFAULT_PLAN_RULES`），但**被应用代码真正 import 的只有 12 个**：
 
 ```
 被 import 的：Message · TravelParams · PlanChatData · PlanChatRequest · PlanGenerateRequest
               SpotOption · Transfer · TravelDay · TravelPlan · TravelSpot
+              PlanProgress · PlanProgressStep
 
 只作为嵌套字段类型出现的：PlanProvenance（TravelPlan.provenance）·
                           RetrievalPlan（PlanProvenance.retrievalPlan）·
-                          RejectedCandidate（PlanProvenance.rejected[]）
+                          RejectedCandidate（PlanProvenance.rejected[]）·
+                          HotelStay（TravelDay.hotel）· ProgressStepState（PlanProgressStep.state）
 
 前端从不使用的（后端检索层/规则层的镜像）：PoiCandidate · HotelCandidate ·
                                           Candidate · PlanRules · DEFAULT_PLAN_RULES
@@ -499,7 +508,7 @@ TravelPlan { summary, days[], warnings[], provenance, spotPool[] }
 | 2 | 根 `tsconfig.json` 是**解决方案文件**（`"files": []` + references） | `npx tsc --noEmit` 在根目录是**空转**。真正的类型检查是 `npm run build` 里的 `tsc -b` |
 | 3 | `README.md` 还是 Vite 模板原文 | 看完不知道这是干什么的 |
 | 4 | `index.html` 的 `<title>` 还是 `frontend` | 浏览器标签页显示"frontend"（`lang` 已改成 `zh-CN`） |
-| 5 | `pages/TravelPlanner/index.tsx` **单文件 702 行** | 现在还能读；再长下去，`DayCard` / `SpotRow` / `TransferLine` 是最先该拆出去的三个 |
+| 5 | `pages/TravelPlanner/index.tsx` **单文件 1003 行** | 已经到该拆的线上了；`DayCard` / `SpotRow` / `TransferLine` / `AlternativeLine` 是最先该拆出去的几个 |
 | 6 | 没有路径别名（没有 `@/`） | 全部相对路径（`'../../hooks/usePlanChat'`）。层次再深就会开始难看，但现在是 3 层，不值得为它改 tsconfig + vite 两处 |
 | 7 | `spotPool` 里的点也包含已排进日程的那些 | 这是**故意的**（见 `types/plan.ts` 的三条性质）：用户把 A 换成 B 后 A 要能换回来。切片由前端的 `alternativesFor` 做，**每换一次都要重切** |
 
@@ -516,5 +525,5 @@ TravelPlan { summary, days[], warnings[], provenance, spotPool[] }
 | `api/http.ts` | 唯一出口：协议 + 超时 + 错误分类 + Mock 降级 |
 | `api/plan.ts` | 三个接口（对话 / 生成 / 进度）+ 前两个各自的假数据 |
 | `hooks/usePlanChat.ts` | 前端全部业务状态；镜像 ref、并发闸门、稀疏覆盖都在这 |
-| `pages/TravelPlanner/index.tsx` | 唯一页面；5 个局部组件 + 8 个纯函数 |
+| `pages/TravelPlanner/index.tsx` | 唯一页面；8 个局部组件 + 10 个纯函数 |
 | `vite.config.ts` | dev server 和 `/api` 代理（唯一一处转发配置） |

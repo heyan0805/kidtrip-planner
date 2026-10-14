@@ -5,7 +5,7 @@
 
 - Spring Boot **4.1.1** · Java **21** · LangChain4j **1.18.1** · DeepSeek（`deepseek-chat`）
 - 端口 **8003**（参照工程是 8002，两个可以同时跑）
-- 60 个源文件 / 7121 行 · 19 个测试类 / **222** 个用例
+- 62 个源文件 / 8130 行 · 21 个测试类 / **264** 个用例
 
 > 前端说明见 [`../frontend/README.md`](../frontend/README.md)；
 > 想先看整体架构和产品原则，读仓库根的 [`../README.md`](../README.md)。
@@ -115,12 +115,17 @@ curl -s http://localhost:8003/api/health
 | GET | `/api/health` | 服务活着吗 | — |
 | POST | `/api/plan/chat` | 对话，一轮轮把画像攒出来 | `{ messages, currentParams }` |
 | POST | `/api/plan/generate` | 拿画像去查、去排，产出行程 | `{ params, retrieval?, maxTicketPriceYuan? }` |
+| GET | `/api/plan/progress/{runId}` | 这一次生成走到第几步了（前端每秒轮询） | — |
 | POST | `/api/retrieval/pool` | 给一个"期望"，拿回可追溯的候选池 | `{ city, startDate, days, wantedCategories, keywords, needHotel, maxTicketPriceYuan }` |
 | GET | `/api/flyai/probe/poi` | **探针**：看飞猪原样吐了什么 | `?city=&category=&keyword=` |
 | GET | `/api/flyai/probe/hotel` | **探针**：同上，酒店 | `?city=&poiName=&checkIn=&checkOut=` |
 
 两个探针接口不做任何清洗、不筛选、不缓存，并且**会回显真实命令**。
 它们的存在是为了在出问题时能证明「飞猪给的就是这样」，与"我们没把它改坏"分开归因。
+
+`/plan/progress/{runId}` 的 `runId` 由调用方自己生成，从 **请求头 `X-Run-Id`** 带进来 ——
+刻意**不进请求体**：那句旁路信息不该混进被契约测试和前端类型两头钉着的 `PlanGenerateRequest`。
+不带这个头照样能生成（老调用方零改动），只是没有进度可看。
 
 **`/chat` 和 `/generate` 是前半段和后半段**，不是两个独立功能：
 chat 的产物 `params` 正好是 generate 的入参，前端原样递过去即可，不用做任何转换。
@@ -169,13 +174,18 @@ chat 的产物 `params` 正好是 generate 的入参，前端原样递过去即�
 | `health` | `/api/health` | 几乎不变 |
 | `flyai` | 飞猪 CLI 接入：进程启动、参数拼装、原始 DTO（`raw/`）、城市名校验 | 飞猪 CLI 参数变了 |
 | `candidate` | 原始数据 → 干净候选（规范化、去重、坐标） | 上游字段变了 |
-| `retrieval` | 检索编排：限流闸门、缓存、城际车次挑选、候选池 | 检索策略变了 |
+| `retrieval` | 检索编排：限流闸门、缓存、城际班次挑选（火车 / 机票两种载体）、候选池 | 检索策略变了 |
 | `rule` | 白名单规则与 `RuleChecker` | 产品约束变了 |
 | `llm` | 三个 Composer（对话 / 规划检索条件 / 排行程）+ 模型配置 | prompt 变了 |
 | `plan` | 编排层 + **契约镜像**（对前端的 DTO 全在这里） | 接口契约变了 |
 
 `plan` 包里的 `TravelPlan` / `TravelDay` / `TravelSpot` / `HotelStay` / `SpotOption`
 是**对前端的契约镜像**，与前端 `src/types/plan.ts` 一一对应 —— 改字段两边要一起改。
+
+其中 `TravelDay.alternatives`（同一天的**其它走法**，目前只可能是飞机）与 `Transfer.mode`
+是 2026-10-14 加机票时新增的，改这两个名字要同时改前端的类型、`api/plan.ts` 的假数据和页面渲染。
+字段故意叫 `alternatives` 而不叫 `flight`：以后要加大巴、轮渡，加的是一类**备选走法**，
+契约不用跟着改。
 
 ### 三个 Composer 的分工
 
@@ -219,6 +229,29 @@ prompt 里不给模型经纬度数字（让 LLM 比两串坐标是碰运气）�
 实测：并发 6 个 → 3 个 429；连续串行不间隔 → 后 3 个 451（风控）；
 冷却 90 秒后串行 + 间隔 7 秒 → 全部成功。所以有 `min-gap-ms` 这道闸门。
 
+**⑦ 机票只在「火车这条腿偏累」时才查，而且只作参考。**
+
+- **触发条件是一个已定事实，不是猜的。** 火车查询返回「无直达」或「最快那班也超限」才补查一次航班；
+  火车在 180 分钟内就**一次都不查**（`PlanServiceFlightTest` 钉住这一条）。
+  一次 `/generate` 最多去/回各查一次 ⇒ 上游成本有上界，这也正是要保住 `min-gap-ms` 那条串行线的理由。
+- ⚠️ **火车查询失败（`UPSTREAM_ERROR`）时不补查。** "不知道这条路多长"和"这条路太长"是两件事 ——
+  前者去补查，要么白花一次额度，要么给出「这段路只有飞机」这种**假结论**。
+- **两种载体并列展示，代码里不做「划不划算」的判断。** 票价随日期飘：同一条深圳→上海，
+  12-10 最低 ¥610、11-17（深圳秋假）¥1510 —— **飘的幅度（2.5 倍）比两种载体之间的固定差距还大**。
+  所以任何"机票更贵/更划算"的自动结论都是拿一个会飘的数字替用户做决定。
+  界面只负责说清"票价是查询当时的"，并给个飞猪链接；选哪个由用户定。
+- **`primary` / `alternatives` 是分开的**：`primary` 进 prompt（模型据此排首末日的时刻），
+  `alternatives` **不进 prompt**（只给用户看）。火车有则火车当 `primary`（哪怕超限），火车没有才轮到飞机顶上。
+- **两条取数事实，都是实测出来的（`--help` 不是契约）：**
+  - `--total-duration-hour` 对机票会被上游 **400 拒绝**（`Argument not allowed: [totalDurationHour]`）——
+    它在 `--help` 里列着，服务端不认。⇒ **机票的时长红线只能在本地判**，两种载体的查询条件必须分开拼。
+  - `--journey-type 1` 对机票**有效**（只留直达）。不筛的话池子里混着 630 分钟的经停航班，
+    而且**最便宜的那条往往是最慢的** —— 不筛时长，"最便宜"就是个陷阱。
+- 机票的返回结构与火车**逐字同形**（`journeys[].segments[]` 字段名全一样），
+  唯一差异是外层价格火车叫 `price`、机票叫 `ticketPrice`。所以一个 `FlyaiLeg` 同时服务两种载体
+  （它原来叫 `FlyaiTrain`，那样命名是误导），载体由 `Transfer.mode` 带下去。
+  `mode` **不参与任何判断**，只是把已经定下来的事实传到渲染层。
+
 ---
 
 ## 7. 配置速查
@@ -233,7 +266,7 @@ prompt 里不给模型经纬度数字（让 LLM 比两串坐标是碰运气）�
 | `kidtrip.flyai.min-gap-ms` | `3000` | 两次调用最小间隔（限流闸门，**别调 0**） |
 | `kidtrip.flyai.cache-ttl-seconds` | `600` | 同条件结果缓存时长 |
 | `kidtrip.flyai.hotel-stars` | `"4,5"` | 酒店星级筛选；空串 = 关掉（飞猪默认按价格升序，约等于把青旅排最前） |
-| `kidtrip.flyai.max-leg-minutes` | `180` | 城际单段时长上限（带娃的核心约束，**没有"关掉"状态**） |
+| `kidtrip.flyai.max-leg-minutes` | `180` | 城际单段时长上限（带娃的核心约束，**没有"关掉"状态**）。火车是"上游粗筛 + 本地判"双保险，机票**只能本地判**（见第 6 节 ⑦） |
 | `kidtrip.flyai.cache-file` | `""` | 空 = 纯内存；填路径则落盘（演示前预跑用，**要同时调长 ttl**） |
 | `kidtrip.llm.api-key` | `${DEEPSEEK_API_KEY:}` | 缺了启动就失败 |
 | `kidtrip.llm.base-url` | `https://api.deepseek.com` | 兼容 OpenAI 协议，换 URL 即可换厂商 |
@@ -247,25 +280,26 @@ prompt 里不给模型经纬度数字（让 LLM 比两串坐标是碰运气）�
 
 ```bash
 cd backend
-mvn test          # 222 个用例
+mvn test          # 264 个用例
 mvn test -Dtest=LegServiceTest    # 单个类
 ```
 
-**222 / 222 全绿**，19 个测试类 / 3609 行（另有 1 个测试替身 `FakeChatModel`）。分布（用例数）：
+**264 / 264 全绿**，21 个测试类 / 4368 行（另有 1 个测试替身 `FakeChatModel`）。分布（用例数）：
 
 | 测试类 | 数量 | 护住什么 |
 |---|---|---|
-| `retrieval/LegServiceTest` | 22 | 城际车次挑选：去程/回程时段窗口、**最快的首班车不能胜出** |
+| `retrieval/LegServiceTest` | 38 | 城际班次挑选（火车 + 机票）：去程/回程时段窗口、**最快的首班车不能胜出**、超限仍然给车、跨午夜不算合格、机票不发时长筛选且只留直达 |
 | `plan/PlanAssemblerTest` | 23 | 装配：编号回填、缺字段、顺序 |
 | `llm/ChatComposerTest` | 20 | 画像抽取与合并 |
 | `plan/TravelParamsMergeTest` | 14 | 多轮对话里画像的增量合并 |
 | `retrieval/FlyaiCacheStoreTest` | 13 | 缓存：命中、过期、坏文件不拦启动 |
+| `plan/GenerationProgressTest` | 13 | 真实分步进度：耗时是真量的、失败时后面几步**不能**被标成已完成 |
 | `llm/RetrievalPlannerTest` | 12 | 检索条件规划 |
-| `flyai/FlyaiPropertiesTest` | 11 | 配置校验（含"缺 cli-path 启动即失败"） |
+| `plan/PlanServiceFlightTest` | 11 | 机票的**触发条件**（超限/无火车才查、在上限内不查、**查询失败不查**）与"谁当主选" |
+| `plan/PlanServiceLegConflictTest` | 11 | 首末日与班次的冲突判定 |
 | `plan/PlanServiceGeoConflictTest` | 11 | 距离兜底校验（双向：有冲突必有警告、无冲突必无警告） |
 | `plan/GeoTest` | 10 | 距离公式与边界（赤道 lat=0 不算缺值、缺坐标回 null 不是 0） |
-| `plan/PlanServiceLegConflictTest` | 9 | 首末日与车次的冲突判定 |
-| 其余 9 个类 | 77 | — |
+| 其余 10 个类 | 88 | — |
 
 **测试怎么写**：纯函数优先抽 `static`（`firstDayConflict` / `lastDayConflict` /
 `spotSpreadConflict` / `morningCommuteConflict` / `Geo.distanceKm`），这样能直接测，
@@ -287,7 +321,10 @@ mvn test -Dtest=LegServiceTest    # 单个类
 
 **已知限制**：
 
-- `/generate` 要 25~60 秒，目前只有一句等待文案。真正的解法是流式输出或分步返回，还没做。
+- `/generate` 要 25~60 秒。现在报的是**真实的五步进度**（`GET /api/plan/progress/{runId}`，前端每秒轮询），
+  但"步骤里面"还看不见：那 2~10 秒的检索查了几轮、是宽查还是补查，没有报出来。
+- **机票只作参考，我们没有"哪种更划算"的判断。** 票价随日期飘的幅度比两种载体的固定差距还大（见第 6 节 ⑦），
+  而门到门时间还要加上提前到机场和进城 —— 这两笔账都没算。界面上是把两种走法并排摆出来，选哪个由用户定。
 - `HotelStay.rating` 实际上永远填不上 —— 飞猪酒店接口不带评分字段。要么删掉，要么显式显示"暂无评分"。
 - 三条 LLM 调用共用一个温度（见第 5 节）。
 - 多城市串联（如"广州+珠海"一次规划）没做。

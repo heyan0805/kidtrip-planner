@@ -7,6 +7,7 @@ import com.hellen.kidtrip.plan.CandidateCodes;
 import com.hellen.kidtrip.plan.Legs;
 import com.hellen.kidtrip.plan.TravelParams;
 import com.hellen.kidtrip.retrieval.Transfer;
+import com.hellen.kidtrip.retrieval.TransportMode;
 import com.hellen.kidtrip.rule.PlanRules;
 import dev.langchain4j.model.chat.ChatModel;
 import org.slf4j.Logger;
@@ -234,26 +235,38 @@ public class PlanComposer {
                     写了就会被当成我们查到的真事。""";
         }
         StringBuilder sb = new StringBuilder("""
-                【已查到的往返交通】下面是系统从飞猪查到的**真实车次**（不是估计值）。
+                【已查到的往返交通】下面是系统从飞猪查到的**真实班次**（不是估计值）。
                 第 1 天和最后一天的安排**必须**和它们对得上 —— 见硬性要求第 13、14 条：
 
                 """);
-        if (legs.outbound() != null) {
-            sb.append("- 去程：").append(legLine(legs.outbound())).append('\n');
+        // ⚠️ 只渲染 **primary**（主选），不渲染 alternatives。
+        //    段路同时有火车和飞机时，模型要做的判断只有一个："这一天几点能开始、几点必须收摊"，
+        //    而那件事只有一个答案。把"另外还可以飞"也喂进来，它大概率会在 tips 里补一句
+        //    "也可以考虑飞机"—— 一句我们无法核对的话（价格和时刻都可能被它改写），
+        //    却一个字都不会让排程更准。备选走法是给**用户**看的，在界面上并排显示，见 TravelDay。
+        if (legs.outboundTransfer() != null) {
+            sb.append("- 去程：").append(legLine(legs.outboundTransfer())).append('\n');
         }
-        if (legs.inbound() != null) {
-            sb.append("- 回程：").append(legLine(legs.inbound())).append('\n');
+        if (legs.inboundTransfer() != null) {
+            sb.append("- 回程：").append(legLine(legs.inboundTransfer())).append('\n');
         }
         sb.append("（车次不用你写进行程里 —— 系统会自己贴到对应那一天的交通行上。"
                 + "你要做的只是按这两个时刻来安排当天第一个点和最后一个点。）");
         return sb.toString();
     }
 
-    /** "去程：11-17 10:10 深圳北 → 10:39 广州南（高铁G390，29 分钟）" */
+    /**
+     * "去程：11-17 10:10 深圳北 → 10:39 广州南（高铁G390，29 分钟）"
+     *
+     * ⚠️ 文案跟着载体走：飞机那边"车站未知"是个错词。这不是吹毛求疵 ——
+     *    这段文字是给模型看的，而模型会把看到的词原样写进 tips 给用户看。
+     */
     static String legLine(Transfer t) {
-        return renderMoment(t.depDateTime()) + " " + blankTo(t.depStation(), "车站未知")
-                + " → " + renderMoment(t.arrDateTime()) + " " + blankTo(t.arrStation(), "车站未知")
-                + "（" + blankTo(t.trainNo(), "车次未知") + "，"
+        boolean flight = t.mode() == TransportMode.FLIGHT;
+        String place = flight ? "机场" : "车站";
+        return renderMoment(t.depDateTime()) + " " + blankTo(t.depStation(), place + "未知")
+                + " → " + renderMoment(t.arrDateTime()) + " " + blankTo(t.arrStation(), place + "未知")
+                + "（" + blankTo(t.serviceNo(), flight ? "航班未知" : "车次未知") + "，"
                 + (t.durationMinutes() == null ? "耗时未知" : t.durationMinutes() + " 分钟") + "）";
     }
 

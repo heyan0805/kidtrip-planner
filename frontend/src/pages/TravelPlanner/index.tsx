@@ -579,6 +579,28 @@ function DayCard({
             "这段路孩子受不受得了"的一行。 */}
         {day.transfer && <TransferLine transfer={day.transfer} />}
 
+        {/* 同一段路的**其它走法**（目前只可能是飞机）。排在主选下面、住宿上面 ——
+            它讲的还是"怎么到"这件事，只是另一个答案。
+
+            ⚠️ 契约上 `alternatives` 永远非 null（后端没有就给空数组），所以 `?? []` 看起来是多余的。
+            它不是 —— 2026-10-14 实测撞到过：**前端静态包与后端 jar 不是同一版**时
+            （这里就是"新前端 + 改前的 8003"），旧后端根本不发这个字段，
+            于是 `day.alternatives.map` 抛 `Cannot read properties of undefined (reading 'map')`，
+            React 把**整份行程**卸载掉 —— 不是少一行机票，是白屏。
+            少一个新字段变成整页打不开，是这套东西最差的失效方式（现场演示时尤其如此）。
+            ⚠️ 但这只是**一处**兜底，不是通用兼容层：比如 `mode` 缺失不会崩，
+            它只会画成 🚄 —— 静默画错。真正的解法是前后端同版本部署，
+            这个 `??` 只负责把"最坏结果"从白屏降成"少一行"。
+            （这条和 `day.transfer &&` 是同一个位置上的同一条规矩。） */}
+        {(day.alternatives ?? []).map((alt) => (
+          <AlternativeLine
+            // key 用班次号 + 时刻：同一条走法在两段路里出现时（理论上不会），
+            // 只靠班次号会撞 key，而 React 的 key 重复是**静默**的错。
+            key={`${alt.mode}-${alt.serviceNo ?? ''}-${alt.depDateTime}`}
+            transfer={alt}
+          />
+        ))}
+
         {day.hotel ? (
           <p className="text-gray-700">
             🏨 {day.hotel.name}
@@ -829,10 +851,11 @@ function formatKm(km: number): string {
  *    藏起来用户会以为这是一趟车坐到底。用醒目的颜色标出来，别做成一等公民之外的注释。
  */
 function TransferLine({ transfer: t }: { transfer: Transfer }) {
+  const flight = t.mode === 'FLIGHT'
   return (
     <div className="mb-2 text-gray-700">
       <p>
-        <span className="mr-1">🚄</span>
+        <span className="mr-1">{flight ? '✈️' : '🚄'}</span>
         <span className="font-medium">
           {hhmm(t.depDateTime)} {t.depStation}
         </span>
@@ -840,7 +863,7 @@ function TransferLine({ transfer: t }: { transfer: Transfer }) {
         <span className="font-medium">
           {hhmm(t.arrDateTime)} {t.arrStation}
         </span>
-        {t.trainNo && <span className="ml-2 text-gray-500">{t.trainNo}</span>}
+        {t.serviceNo && <span className="ml-2 text-gray-500">{t.serviceNo}</span>}
         {/* 耗时是这一行的重点，加粗一档，因为"几个小时"本身就是产品约束 */}
         {t.durationMinutes !== null && (
           <span className="ml-2 font-medium text-gray-900">{formatDuration(t.durationMinutes)}</span>
@@ -851,9 +874,9 @@ function TransferLine({ transfer: t }: { transfer: Transfer }) {
         </span>
         {t.seatClass && <span className="ml-1 text-gray-400">{t.seatClass}</span>}
       </p>
-      {(!t.direct || t.jumpUrl) && (
+      {(!t.direct || t.transferCity || t.jumpUrl) && (
         <p className="mt-1 flex items-center gap-2 text-xs">
-          {!t.direct && (
+          {(!t.direct || t.transferCity) && (
             <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-900">
               需在{t.transferCity ?? '中途'}换乘
             </span>
@@ -865,11 +888,74 @@ function TransferLine({ transfer: t }: { transfer: Transfer }) {
               rel="noreferrer"
               className="text-gray-500 hover:text-gray-800"
             >
-              去飞猪看这趟车
+              {flight ? '去飞猪看这班航班' : '去飞猪看这趟车'}
             </a>
           )}
         </p>
       )}
+    </div>
+  )
+}
+
+/**
+ * 同一段路的**另一种走法**（目前只有飞机）—— 比主选弱一档，但信息一个不少。
+ *
+ * ── 为什么它必须存在，而且必须挨着主选显示 ────────────────────────
+ *   后端只在"火车这条腿带娃偏累"时才补查它（超了 180 分钟那条线，或压根没有火车）。
+ *   那种情况下用户看到"高铁 6 小时 40 分"是对的，但**不完整**：实测同一条线上
+ *   12-10 的机票 ¥610，比白天的高铁（¥848）还便宜，而且只要 2 小时。
+ *   把这个选项藏起来，等于替用户把选择收走了 —— 而这个项目的立场一直是
+ *   "说清事实，决定权留给家长"。
+ *
+ * ── 三个刻意的取舍 ──────────────────────────────────────────────
+ * ① **配色弱一档（灰 + 琥珀标签），不抢主选的位置。**
+ *    并排的两个选项不该看起来一样重：当天的时间安排是按主选排的，别让用户以为
+ *    "两个都订了"或者"系统推荐飞机"。
+ * ② **明说价格是查询当时的。** 机票浮动比火车大得多（实测同一条航线隔一个月差 2.5 倍），
+ *    不写这句，用户会把 ¥610 当成一个能拿去比价的确定数字。
+ * ③ **绝不写"更划算"。** 我们不做这个判断 —— 价格会飘、机场要多花两小时、
+ *    行李和值机也不是没有代价。给出事实，判断留给家长。
+ */
+function AlternativeLine({ transfer: t }: { transfer: Transfer }) {
+  const flight = t.mode === 'FLIGHT'
+  return (
+    <div className="mb-2 text-gray-500">
+      <p className="flex flex-wrap items-baseline gap-x-2">
+        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-800">
+          {flight ? '也可以飞' : '也可以坐'}
+        </span>
+        <span className="mr-0.5">{flight ? '✈️' : '🚄'}</span>
+        <span>
+          {hhmm(t.depDateTime)} {t.depStation}
+        </span>
+        <span className="text-gray-400">→</span>
+        <span>
+          {hhmm(t.arrDateTime)} {t.arrStation}
+        </span>
+        {t.serviceNo && <span>{t.serviceNo}</span>}
+        {t.durationMinutes !== null && (
+          <span>
+            {/* ⚠️ 飞机的这个是**纯飞行时间**，不含提前到机场和进城 —— 后端在 warnings 里
+                说清了，这里不重复解释，但也不写成"全程"。 */}
+            {flight ? '飞行 ' : ''}
+            {formatDuration(t.durationMinutes)}
+          </span>
+        )}
+        <span>{t.priceYuan === null ? '票价未知' : `¥${t.priceYuan}`}</span>
+        {t.jumpUrl && (
+          <a
+            href={t.jumpUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-gray-400 underline hover:text-gray-700"
+          >
+            {flight ? '查这个航班' : '看这趟车'}
+          </a>
+        )}
+      </p>
+      <p className="mt-0.5 text-xs text-gray-400">
+        这是另一个走法，要不要选由你定；票价是查询当时的，机票会浮动。当天的时间安排按上面那一趟排的。
+      </p>
     </div>
   )
 }

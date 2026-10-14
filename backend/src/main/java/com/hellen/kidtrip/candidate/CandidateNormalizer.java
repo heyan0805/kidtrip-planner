@@ -4,7 +4,7 @@ import com.hellen.kidtrip.flyai.FlyaiException;
 import com.hellen.kidtrip.flyai.raw.FlyaiEnvelope;
 import com.hellen.kidtrip.flyai.raw.FlyaiHotel;
 import com.hellen.kidtrip.flyai.raw.FlyaiPoi;
-import com.hellen.kidtrip.flyai.raw.FlyaiTrain;
+import com.hellen.kidtrip.flyai.raw.FlyaiLeg;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -122,7 +122,7 @@ public class CandidateNormalizer {
      * 注意它**不解析** `journeys[0]` 就是去程这件事，也不挑班次 ——
      * 那些是 LegService 的判断（它才知道"带娃要上午出发"）。这里只做字段翻译。
      */
-    public Normalized<FlyaiTrain> trains(String rawJson) {
+    public Normalized<FlyaiLeg> trains(String rawJson) {
         FlyaiEnvelope envelope = envelopeOf(rawJson);
         if (envelope.status() != 0) {
             String message = envelope.message();
@@ -133,14 +133,46 @@ public class CandidateNormalizer {
             throw new FlyaiException(FlyaiException.Reason.PARAM,
                     "飞猪拒绝了这次车次查询：" + reasonOf(message));
         }
-        List<FlyaiTrain> out = new ArrayList<>();
+        return legsOf(envelope, "车次");
+    }
+
+    /**
+     * 解析 `search-flight` 的结果 —— 和 {@link #trains} 只差**一处**，而且是刻意差的。
+     *
+     * ── 为什么这里没有 NO_RESULT 那一支 ───────────────────────────────
+     *   `train` 那边的 NO_MATCH_MARKER（"行程时长过滤结果为空"）是一句**结论**：
+     *   它来自我们主动发的时长粗筛参数，所以"空"意味着"这个窗口内没有走法"，
+     *   可以被当成答案告诉用户。
+     *   而航班这边**根本没有发时长筛选参数**（实测上游对机票直接 400 拒绝，
+     *   见 LegService 的注释），所以那句"过滤结果为空"在航班的语义里不会出现。
+     *   硬把同一个判据搬过来，就会把"真的没有直飞"读成"没有走法"——
+     *   又是一次"把故障说成结论"。**判据要跟着它的来源走，不能跟着形状走。**
+     *
+     *   于是这里 status != 0 一律当 PARAM（= 故障）：查不到直飞就交给上层
+     *   "有候选但都超限 / 干脆没有" 那两条已有的路，不在这里下结论。
+     *
+     * 其余（结构、字段名、单条解析失败跳过）与车次**逐字相同**，
+     * 所以共用一个 {@link #legsOf} —— 两段复制粘贴以后只会改一处，而"哪一处该改"没人说得清。
+     */
+    public Normalized<FlyaiLeg> flights(String rawJson) {
+        FlyaiEnvelope envelope = envelopeOf(rawJson);
+        if (envelope.status() != 0) {
+            throw new FlyaiException(FlyaiException.Reason.PARAM,
+                    "飞猪拒绝了这次航班查询：" + reasonOf(envelope.message()));
+        }
+        return legsOf(envelope, "航班");
+    }
+
+    /** 一条列车/航班 item 的公共解析：逐条转 record，坏的跳过并计数（不带走整批） */
+    private Normalized<FlyaiLeg> legsOf(FlyaiEnvelope envelope, String what) {
+        List<FlyaiLeg> out = new ArrayList<>();
         int failed = 0;
         for (JsonNode node : listOrEmpty(envelope)) {
             try {
-                out.add(mapper.treeToValue(node, FlyaiTrain.class));
+                out.add(mapper.treeToValue(node, FlyaiLeg.class));
             } catch (JacksonException e) {
                 failed++;
-                log.warn("一条车次解析失败，已跳过：{}", e.getMessage());
+                log.warn("一条{}解析失败，已跳过：{}", what, e.getMessage());
             }
         }
         return new Normalized<>(out, failed);
@@ -252,6 +284,24 @@ public class CandidateNormalizer {
     /* ============================================================
      * 下面四个是这一层唯一允许"猜"的地方，每个都写了为什么这么猜
      * ============================================================ */
+
+    /**
+     * 一条走法的价格 —— 火车读 `price`、机票读 `ticketPrice`，**哪个有值用哪个**。
+     *
+     * 为什么要在这里收口：这是"上游给同一个东西起了两个名字"的**唯一**落地点。
+     * 让调用方自己去挑字段的话，这个知识会散到每个用它的地方，而且漏一个不会报错 ——
+     * 只会让某个载体的票价**静默地永远是 null**（界面上显示"票价未知"，看着还挺正常）。
+     *
+     * 两个字段实测是**互斥**的（同一次返回里只有一个非 null），所以不需要"优先谁"的规则；
+     * 顺序写 price 在前只是因为火车在先。哪天上游统一成一个名字，改的也只是这一个方法。
+     */
+    public static Double parsePrice(FlyaiLeg leg) {
+        if (leg == null) {
+            return null;
+        }
+        String raw = leg.price() != null && !leg.price().isBlank() ? leg.price() : leg.ticketPrice();
+        return parseYuan(raw);
+    }
 
     /**
      * "¥227" → 227.0。

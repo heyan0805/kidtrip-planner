@@ -84,7 +84,7 @@ function describe(item) {
   const f = segs[0]
   const l = segs[segs.length - 1]
   return {
-    trainNo: (f.marketingTransportName ?? '') + (f.marketingTransportNo ?? ''),
+    serviceNo: (f.marketingTransportName ?? '') + (f.marketingTransportNo ?? ''),
     dep: hhmm(f.depDateTime),
     arr: hhmm(l.arrDateTime),
     depStation: f.depStationShortName,
@@ -138,7 +138,7 @@ check(!!inbound, '最后一班有交通信息', 'transfer 是 null')
 if (inbound) {
   const dep = inbound.depDateTime.slice(11, 16)
   const arr = inbound.arrDateTime.slice(11, 16)
-  console.log(`     实际拿到：${dep} ${inbound.depStation} → ${arr} ${inbound.arrStation}  ${inbound.trainNo}  ${inbound.durationMinutes} 分钟`)
+  console.log(`     实际拿到：${dep} ${inbound.depStation} → ${arr} ${inbound.arrStation}  ${inbound.serviceNo}  ${inbound.durationMinutes} 分钟`)
 
   check(dep >= RETURN_EARLIEST, `发车不早于 ${RETURN_EARLIEST}（用户要下午走）`, `实际 ${dep}`)
   check(arr <= RETURN_ARRIVE_BY, `到达不晚于 ${RETURN_ARRIVE_BY}（别把疲劳带回家）`, `实际 ${arr}`)
@@ -150,7 +150,7 @@ if (inbound) {
 console.log(`\n【3】去程车：上午出发，别傍晚才到`)
 if (outbound) {
   const dep = outbound.depDateTime.slice(11, 16)
-  console.log(`     实际拿到：${dep} ${outbound.depStation} → ${outbound.arrDateTime.slice(11, 16)} ${outbound.arrStation}  ${outbound.trainNo}`)
+  console.log(`     实际拿到：${dep} ${outbound.depStation} → ${outbound.arrDateTime.slice(11, 16)} ${outbound.arrStation}  ${outbound.serviceNo}`)
   check(dep >= OUTBOUND_EARLIEST && dep <= OUTBOUND_LATEST, `发车落在 ${OUTBOUND_EARLIEST}~${OUTBOUND_LATEST}`, `实际 ${dep}`)
 } else {
   check(false, '第一天有交通信息')
@@ -168,12 +168,12 @@ for (const [label, direction, from, to, date, actual] of [
     continue
   }
   const e = describe(expected)
-  console.log(`     复算结果：${e.dep} ${e.depStation} → ${e.arr} ${e.arrStation}  ${e.trainNo}  ${e.minutes} 分钟`)
+  console.log(`     复算结果：${e.dep} ${e.depStation} → ${e.arr} ${e.arrStation}  ${e.serviceNo}  ${e.minutes} 分钟`)
   check(
-    actual && actual.trainNo === e.trainNo && actual.depDateTime.slice(11, 16) === e.dep
+    actual && actual.serviceNo === e.serviceNo && actual.depDateTime.slice(11, 16) === e.dep
       && actual.arrDateTime.slice(11, 16) === e.arr && actual.durationMinutes === e.minutes,
     `${label}：官方结果和独立复算完全一致`,
-    actual ? `官方 ${actual.trainNo} ${actual.depDateTime.slice(11, 16)} vs 复算 ${e.trainNo} ${e.dep}`
+    actual ? `官方 ${actual.serviceNo} ${actual.depDateTime.slice(11, 16)} vs 复算 ${e.serviceNo} ${e.dep}`
       : '官方是 null'
   )
 }

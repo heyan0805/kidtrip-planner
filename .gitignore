@@ -41,7 +41,9 @@ _rollback/
 _probe/shots/*.png
 
 # 预跑缓存（约 300K）：里面是真实上游返回，跑一次 prerun.mjs 就有了
+# 探针实例用的是副本（`-probe`），同样不进仓库 —— 它只是为了避免两个进程抢同一个文件
 _probe/flyai-cache.json
+_probe/flyai-cache-probe.json
 
 # 部署配置：它描述的是"我这台后端机"的事实（内网地址、服务名、证书路径），
 # 不是这个项目的事实 —— 而且里面迟早会落进真实环境变量。留在本机，不进仓库。

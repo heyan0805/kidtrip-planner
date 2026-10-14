@@ -32,10 +32,22 @@ import java.util.List;
  *   前端一行比较就能算出来的东西，不要塞进契约。
  *   —— 但这条规矩的**边界**要看清楚：`Transfer.depDateTime` 里的日期就不是冗余
  *   （夜车跨午夜时，它是唯一能说清"到底哪天到"的东西）。**能算出来的不存，算不出来的必须存。**
+ *
+ * ── `alternatives`：那一段路**还有别的走法**（2026-10-14 加机票时加的）────
+ *   它和 transfer 的关系是"主选 / 备选"，不是"两个独立的交通"：
+ *   同一天同一段路，用户要么坐火车要么坐飞机，不会两个都坐。
+ *   所以它**不参与排程**（模型看不到它，见 PlanComposer.renderLegs），
+ *   只回答用户一句"其实也可以飞，价格和时间是这样"。
+ *
+ *   ⚠️ 但它**不是**"飞机的专用字段"：里面装的是 Transfer（带 mode），
+ *      以后要放大巴/轮渡也是往这里放。字段名叫 alternatives 而不是 flight，
+ *      是为了让加第三种载体时**不用改契约**。
  */
-public record TravelDay(int day, String theme, List<TravelSpot> spots, Transfer transfer, HotelStay hotel) {
+public record TravelDay(int day, String theme, List<TravelSpot> spots, Transfer transfer,
+                        List<Transfer> alternatives, HotelStay hotel) {
 
     public TravelDay {
         spots = spots == null ? List.of() : List.copyOf(spots);
+        alternatives = alternatives == null ? List.of() : List.copyOf(alternatives);
     }
 }

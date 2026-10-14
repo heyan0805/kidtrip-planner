@@ -150,7 +150,7 @@ if (!CHECK_ONLY) {
     check(!!inbound, '最后一天有真实回程')
     console.log(`      耗时 ${(ms / 1000).toFixed(1)} 秒 · 车次查询 ${trainQ.length} 条`);
     if (outbound) {
-      console.log(`      ${outbound.from} → ${outbound.to} ${outbound.trainNo ?? ''} `
+      console.log(`      ${outbound.from} → ${outbound.to} ${outbound.serviceNo ?? ''} `
         + `${(outbound.depDateTime ?? '').slice(11, 16)}→${(outbound.arrDateTime ?? '').slice(11, 16)} `
         + `${outbound.durationMinutes} 分 ¥${outbound.priceYuan}`);
     }
