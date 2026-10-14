@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!--
+      为什么用 parent 而不是自己逐个声明 spring-boot-* 的版本：
+      parent 里带了一张"经过官方兼容性验证的依赖版本表"，你写依赖不用写版本号，
+      也就不会出现 spring-web 6.x 配 spring-core 7.x 这种自己拼出来的冲突。
+    -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.1</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.hellen</groupId>
+    <artifactId>kidtrip-backend</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <name>kidtrip-backend</name>
+
+    <properties>
+        <java.version>21</java.version>
+    </properties>
+
+    <dependencies>
+        <!--
+          注意这里叫 spring-boot-starter-webmvc，不是老教程里的 spring-boot-starter-web。
+          Spring Boot 4 把 web 拆细了：webmvc = 传统阻塞式 MVC（我们这个场景要的就是它）。
+          你的参照工程用的也是这个。
+        -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!--
+          ── B4 新增：大模型 ────────────────────────────────────────────
+          只加 langchain4j-open-ai 一个，**没有**加 dev.langchain4j:langchain4j，
+          也没有加 langchain4j-spring-boot-starter。
+          理由：我们要用的只有 ChatModel + OpenAiChatModel（就是"发一句话、收一段文本"），
+          那两样东西属于 core / open-ai，starter 只是帮你把它自动装配成 bean ——
+          而这一步恰好是我们想亲手写清楚的（见 LlmConfig）。
+
+          版本为什么写死 1.18.1 而不是跟 parent 走：
+          LangChain4j 不在 Spring Boot 的依赖版本表里，不写版本号 Maven 会直接报错。
+          选 1.18.1 是因为它和它的整条依赖链（core / http-client / jtokkit）本机 E:\maven-repository
+          里已经有了 —— 少下载几个包，也就少一次"离线跑不起来"。
+
+          ⚠️ 一个必须知道的事实：它会顺带把 **Jackson 2**（com.fasterxml.jackson.core:2.22.x）
+             拉进 classpath，而 Spring Boot 4 自己用的是 **Jackson 3**（tools.jackson.*）。
+             两代 Jackson 的包名不同，所以能共存、不会冲突 ——
+             但你在看依赖树时会看到两套，别以为是配错了。
+        -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-open-ai</artifactId>
+            <version>1.18.1</version>
+        </dependency>
+
+        <!--
+          不引 lombok：我们用 record，不需要它。
+          规矩：没到真要用的时候不往 pom 里加东西 —— 每一个依赖都是一份将来要维护的负担。
+        -->
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

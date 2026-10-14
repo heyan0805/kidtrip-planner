@@ -1,0 +1,211 @@
+import { PROBE_WORKSPACE } from './_paths.mjs'
+/**
+ * 降级路验收：**没有后端**的时候，界面还能不能跑、而且跑得像不像"降级"。
+ *
+ * ══ 为什么这条也要验 ══════════════════════════════════════════════
+ * 现场演示最大的风险不是"功能做少了"，是**整个页面打不开**：
+ * 会场网络不通、后端忘开、端口被占、上游挂了 —— 任意一条都会让 Demo 变成一片空白。
+ *
+ * 这条降级路（VITE_USE_MOCK）是那种"专门为出事那天准备的东西"，
+ * 而它有它自己的失效方式：**它平时永远不会被走到**。
+ * 代码腐化得最快的从来不是每天跑的那条路，是一年走一次的那条 ——
+ * 等到真出事那天才发现它早就坏了，而那时候已经没有时间修了。
+ *
+ * 所以这里要验三件完全不同的事：
+ *   ① 它在**没有任何后端**的情况下真的打得开、真的出得来一份完整行程；
+ *   ② 交通那一行照样渲染（L1 的功能在降级路上不能丢）；
+ *   ③ ⭐ **它看起来必须像降级** —— 界面上到处是"（假数据）"、warning 里写着、
+ *      顶上还有提示条。一份看起来像真结果的假数据，比打不开更糟：
+ *      你会拿它去讲，讲完才发现讲的是编的。
+ *
+ * 用法：
+ *   VITE_USE_MOCK=true npx vite --host 127.0.0.1 --port 5175   # 先起 mock 模式的 dev server
+ *   APP_URL=http://127.0.0.1:5175/ NODE_PATH=<workspace>/node_modules node verify-mock-ui.mjs
+ *
+ * ⚠️ 跑之前**把后端停掉**（`netstat -ano | grep 8003 | grep LISTENING` 取 PID → taskkill）。
+ *    后端开着的时候跑，这个脚本还是会通过（Mock 模式压根不发请求），
+ *    但"没有后端也能用"这句话就变成了**没验证过的说法** —— 而这个脚本存在的全部理由
+ *    就是验证那句话。（第一次跑就是这么验的：停掉 8003，两个 200 变一个 000。）
+ */
+
+import { createRequire } from 'node:module'
+
+const WORKSPACE = PROBE_WORKSPACE
+  .replace(/\/+$/, '')
+const require = createRequire(`${WORKSPACE}/noop.js`)
+const { chromium } = require('playwright-core')
+
+const APP_URL = process.env.APP_URL ?? 'http://127.0.0.1:5175/'
+const SHOTS = new URL('./shots/', import.meta.url).pathname.replace(/^\//, '')
+
+const results = []
+function check(ok, label, detail) {
+  results.push({ ok, label, detail })
+  console.log(`${ok ? '✓' : '✗'} ${label}`)
+  if (detail) console.log(`      ${detail}`)
+}
+
+const browser = await chromium.launch({ channel: 'msedge', headless: true })
+const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } })
+page.on('pageerror', (e) => console.log('   [页面错误]', e.message))
+
+console.log('\n═══ 降级路验收：没有后端时界面还能用吗 ═══')
+console.log(`目标：${APP_URL}`)
+
+try {
+  await page.goto(APP_URL, { waitUntil: 'domcontentloaded' })
+  await page.waitForSelector('h1', { timeout: 15_000 })
+  check(true, '页面在**没有任何后端**的情况下打得开（这条是这一整套验收的全部意义）')
+
+  async function readProfile() {
+    const rows = await page.$$eval('aside dl > div', (els) =>
+      els.map((e) => [
+        e.querySelector('dt')?.textContent?.trim() ?? '',
+        e.querySelector('dd')?.textContent?.trim() ?? '',
+      ]),
+    )
+    return Object.fromEntries(rows)
+  }
+
+  async function send(text) {
+    await page.fill('input', text)
+    await page.click('button:has-text("发送")')
+    await page.waitForSelector('text=正在想', { timeout: 8_000 }).catch(() => {})
+    await page.waitForFunction(() => !document.body.innerText.includes('正在想'), null, {
+      timeout: 30_000,
+    })
+  }
+
+  // 和后端验收脚本用**同一句原文**：这样两条路走的是同一个场景，能直接对照
+  await send('我们广州出发，想带孩子去珠海玩')
+  await send('大概 3 天吧，孩子 6 岁')
+
+  const profile = await readProfile()
+  console.log('      画像：', JSON.stringify(profile))
+  check(profile['出发地'] === '广州',
+    '降级路上「出发地」也被抠出来了（不是"待确认"）',
+    `出发地=${profile['出发地']} —— 抠成"我们广州"就是抠错了，这里同时守着那个正则的前缀`)
+  check(profile['目的地'] === '珠海',
+    '目的地抠出来是"珠海"而不是"珠海玩"',
+    `目的地=${profile['目的地']} —— 尾字没削干净的话这里会是"珠海玩"`)
+
+  await page.click('button:has-text("生成行程")')
+  await page.waitForFunction(() => !document.body.innerText.includes('正在生成'), null, {
+    timeout: 60_000,
+  })
+  await page.screenshot({ path: `${SHOTS}mock-ui-plan.png`, fullPage: true })
+
+  const cards = await page.$$eval('article', (els) =>
+    els.map((e) => ({ title: e.querySelector('h3')?.textContent?.trim() ?? '', text: e.innerText.replace(/\s+/g, ' ').trim() })),
+  )
+  check(cards.length > 0, '降级路上照样生成出了行程卡片', `实际 ${cards.length} 张`)
+
+  const day1 = cards[0]?.text ?? ''
+  check(day1.includes('🚄'),
+    '⭐ L1 的交通行在降级路上照样渲染 —— 功能不因为换了数据源而消失',
+    day1.slice(0, 160))
+  check(day1.includes('动车D947') && day1.includes('53 分钟') && day1.includes('¥70'),
+    '交通行的数字用的是实测真值（动车D947 / 53 分钟 / ¥70）',
+    '换一个假数字，就会让"时长合不合理"这件事在没起后端时失去校准')
+  check((cards.at(-1)?.text ?? '').includes('广州南'),
+    '最后一天也有回程（方向是反的）')
+
+  /* ── ②b ⭐ 「换一个」在降级路上也得能用 ─────────────────────── */
+  // 理由和第 ② 条同源：这份假数据存在的意义是"出事那天顶上去"，
+  // 那么出事那天顶上去的东西**必须包含最重要的功能**。
+  // 一个在降级路上是灰色的「换一个」，等于现场少了一半演示。
+  console.log('')
+  console.log('【换一个】降级路上的可换性')
+
+  const readSpots = () =>
+    page.$$eval('article', (arts) =>
+      arts.flatMap((a) => {
+        const ul = a.querySelector(':scope > ul')
+        return [...(ul?.children ?? [])]
+          .filter((x) => x.tagName === 'LI')
+          .map((li) => {
+            const row = li.querySelector(':scope > div:nth-child(1)')
+            const nameBlock = row?.querySelector('span:nth-child(2)')
+            const btns = [...li.querySelectorAll('button')]
+            const swap = btns.find((b) => b.textContent.includes('换一个'))
+            const picker = li.querySelector(':scope > div:last-child ul')
+            return {
+              name: nameBlock?.querySelector('span:nth-child(1)')?.textContent?.trim() ?? null,
+              tips: nameBlock?.querySelector('span.block')?.textContent?.trim() ?? null,
+              swapLabel: swap?.textContent?.trim() ?? null,
+              swapDisabled: swap?.disabled ?? null,
+              hasRestore: btns.some((b) => b.textContent.includes('恢复原样')),
+              items: picker
+                ? [...picker.children].map((x) => x.innerText.replace(/\s+/g, ' ').trim())
+                : [],
+            }
+          })
+      }),
+    )
+
+  let spots = await readSpots()
+  check(spots.length > 0 && spots.every((s) => s.swapLabel),
+    `降级路上每个点都有「换一个」（${spots.length} 个点）`,
+    JSON.stringify(spots.map((s) => s.swapLabel)))
+  check(spots.every((s) => !s.swapDisabled), '按钮都是可点的（不是灰的）',
+    JSON.stringify(spots.filter((s) => s.swapDisabled).map((s) => s.name)))
+  // 假数据里 pool = days + 4，用掉 days 个 → 可换 4 个
+  const mockAvail = Number((spots[0]?.swapLabel ?? '').match(/(\d+)\s*个/)?.[1] ?? NaN)
+  check(mockAvail === 4,
+    `按钮说还有 4 个（假数据的池子 = 天数 + 4，用掉 ${spots.length} 个）`,
+    `实际说「${spots[0]?.swapLabel}」`)
+
+  const mockBase = { name: spots[0].name, tips: spots[0].tips }
+  await page.locator('article').nth(0).locator('> ul > li').nth(0)
+    .locator('button:has-text("换一个")').click()
+  await page.waitForTimeout(250)
+  spots = await readSpots()
+  check(spots[0].items.length === 4, `清单里 4 条`, `实际 ${spots[0].items.length} 条`)
+  check(spots[0].items.every((it) => it.includes('假数据')),
+    '清单里的每一条也带着"（假数据）"—— 换上来的东西同样不能被误当成真的',
+    JSON.stringify(spots[0].items))
+
+  await page.locator('article').nth(0).locator('> ul > li').nth(0)
+    .locator('ul > li button').nth(0).click()
+  await page.waitForTimeout(250)
+  spots = await readSpots()
+  check(spots[0].name !== mockBase.name, `换上了（${mockBase.name} → ${spots[0].name}）`)
+  check(spots[0].tips?.includes('换上的备选没有游玩建议') === true,
+    '⭐ 降级路上同样会清掉上一个点的建议（这条规矩不因为数据源而变）',
+    JSON.stringify(spots[0].tips))
+  check(spots[0].hasRestore, '出现了「恢复原样」')
+
+  await page.locator('article').nth(0).locator('> ul > li').nth(0)
+    .locator('button:has-text("恢复原样")').click()
+  await page.waitForTimeout(250)
+  spots = await readSpots()
+  check(spots[0].name === mockBase.name && spots[0].tips === mockBase.tips,
+    '⭐ 「恢复原样」把名字和建议都精确还回来了',
+    `${mockBase.name} / ${mockBase.tips}`)
+
+  /* ── ③ 看起来必须像降级 ─────────────────────────────────────── */
+  await page.screenshot({ path: `${SHOTS}mock-ui-swap.png`, fullPage: true })
+  const body = await page.innerText('body')
+  check(body.includes('假数据'),
+    '⭐ 界面上到处写着"（假数据）"—— 它不可能被误当成真实结果',
+    `"假数据" 出现 ${(body.match(/假数据/g) ?? []).length} 次`)
+  check(/正在用本地假数据|VITE_USE_MOCK/.test(body),
+    '⭐ 页面上有"正在用假数据"的提示条（降级必须留痕，否则等于骗用户）',
+    (body.match(/[^\n]*假数据[^\n]*/g) ?? []).slice(0, 2).join(' | '))
+  check(body.includes('不是后端返回的真实行程'),
+    '⭐ warnings 里也明说了"不是后端返回的真实行程"')
+} catch (e) {
+  check(false, '脚本执行完成', `异常：${e.message}`)
+} finally {
+  await browser.close()
+}
+
+const failed = results.filter((r) => !r.ok)
+console.log('\n' + '─'.repeat(60))
+console.log(`共 ${results.length} 项，通过 ${results.length - failed.length}，失败 ${failed.length}`)
+if (failed.length > 0) {
+  console.log('\n失败项：')
+  failed.forEach((f) => console.log(`  ✗ ${f.label}${f.detail ? ` —— ${f.detail}` : ''}`))
+  process.exit(1)
+}
+console.log('全部通过。')

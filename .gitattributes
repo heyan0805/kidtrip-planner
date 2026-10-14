@@ -1,0 +1,16 @@
+# 仓库里统一存 LF，检出时由 git 按平台处理。
+# 这个项目在 Windows 上开发、开源给跨平台读者，不写这一句的话，
+# 同一个文件在不同机器上会以不同行尾提交，diff 里全是"整文件重写"的噪音。
+* text=auto
+
+# Windows 的批处理必须是 CRLF，否则某些 cmd.exe 会读错
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制：git 别去碰它
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.jar binary

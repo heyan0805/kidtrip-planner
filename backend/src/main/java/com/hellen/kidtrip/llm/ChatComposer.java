@@ -1,0 +1,432 @@
+package com.hellen.kidtrip.llm;
+
+import com.hellen.kidtrip.common.JsonText;
+import com.hellen.kidtrip.flyai.CityNames;
+import com.hellen.kidtrip.plan.Message;
+import com.hellen.kidtrip.plan.PlanChatData;
+import com.hellen.kidtrip.plan.TravelDates;
+import com.hellen.kidtrip.plan.TravelParams;
+import dev.langchain4j.model.chat.ChatModel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+import tools.jackson.databind.ObjectMapper;
+
+import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
+
+/**
+ * B5 第一步：**对话 → 画像**。
+ *
+ * 它是"上下文传递"里真正用到上下文的那一环：把**全部对话历史** + **已经攒出来的画像**
+ * 一起交给模型，让它①说一句该说的话，②给出这一轮新听出来的字段。
+ *
+ * 这个类的骨架来自参照工程（kidtrip-planner-backend 的 TravelChatService，
+ * 那份契约是前后端已经跑通的 —— 请求 `{messages, currentParams}` / 响应 `{reply, params}`），
+ * 但有**四处刻意不同**，每一处都是那一版做不到或者做错的事：
+ *
+ * ① startDate —— 参照工程的画像里**没有这个字段**。我们加了（酒店要用它算入离日期），
+ *    所以 prompt 里也得让模型去问，否则"出发日期"永远是空的。
+ *
+ * ② 三态 —— 参照工程用 `stroller: false` 表示"默认不需要"，于是"还没问过"和"明确不需要"
+ *    被合并成一个值。这里改成 null=true 没问过 / true=需要 / false=不需要，
+ *    **并且 prompt 里明确写了这三种值的区别** —— 模型不知道区别的话，代码写得再对也没用。
+ *
+ * ③ 增量输出 —— 参照工程的 prompt 要求模型"输出合并后的完整状态"。
+ *    这里改成**只输出这一轮新听出来的字段**，合并交给代码（TravelParams.mergedWith）。
+ *    理由是"让模型复述全部历史"本身就是个错误来源：它可能把上一轮的城市写错、漏掉一个偏好，
+ *    而这些错误都会被当成"新信息"信以为真。
+ *    ⚠️ 这条改动是安全的，因为合并逻辑对两种输出都成立 —— 模型要是仍然输出完整状态，
+ *       mergedWith 一样会得到正确结果。**改 prompt 而不改数据流，前提是数据流本来就能容纳两种输入。**
+ *
+ * ④ 重试 —— 参照工程解析失败就降级回一句话。这里先重试一次（带上"上次不是合法 JSON"的提示），
+ *    仍然失败才降级。理由和 PlanComposer 那边一样：模型输出不是合法 JSON 是**常态**，
+ *    一次就放弃等于把一次本可以成功的对话白白浪费掉。
+ *
+ * ⑤ **洗净模型输出**（sanitize，2026-10-13 实测后补的）—— 见下面两个守门类。
+ *    教训来自用户在界面上真实走的那一遍：他说"广东周边"，模型就填"广东周边"；
+ *    他说"11月17日"，模型填了**去年**的 11-17。两件事模型都"没做错"，
+ *    它只是照抄了它听到的、猜了一个它不可能知道的年份 —— 而我们的代码一条都没挡。
+ *    修法分两头，缺一不可：
+ *      · prompt 说清楚（模型不该犯）——但 prompt 是**优化**，不是保证；
+ *      · sanitize 兜住  （犯了也没用）——这才是保证。
+ *    和 PoiCategories / CandidateCodes 是同一套：**能机械校验的，一律不信模型。**
+ *
+ * ── 和 PlanComposer 最重要的一处不同：**这里失败不抛异常** ──────────────
+ * PlanComposer（排行程）失败必须抛 LlmException —— 没有候选就没有任何退路，报错是唯一诚实的选择。
+ * 这里（聊天）失败**降级成一句话**："抱歉，我没太理解你的意思，能再说一遍吗？"，画像原样保留。
+ * 判断标准是一条：**失败之后还有没有别的出路？**
+ *   聊天有 —— 用户再说一遍就行，而且对话不能因为一次解析失败就断掉；
+ *   排行程没有 —— 只能报错让用户重试。
+ * 同一件事（LLM 调用失败）在两条路径上处理方式不同，不是不一致，是**出路不同**。
+ */
+@Component
+public class ChatComposer {
+
+    private static final Logger log = LoggerFactory.getLogger(ChatComposer.class);
+
+    /** 单次对话最多试几次。第 2 次带上"上次不是合法 JSON"的提示 */
+    private static final int MAX_ATTEMPTS = 2;
+
+    /** 解析不出来时的兜底话术。要能继续对话，不能是一句死胡同 */
+    private static final String FALLBACK_REPLY = "抱歉，我没太理解你的意思，能再说一遍吗？";
+
+    private final ChatModel chatModel;
+    private final ObjectMapper objectMapper;
+
+    public ChatComposer(ChatModel chatModel, ObjectMapper objectMapper) {
+        this.chatModel = chatModel;
+        this.objectMapper = objectMapper;
+    }
+
+    /**
+     * 走一轮对话。
+     *
+     * @param messages 全部对话历史（不含本轮以外的加工），顺序即时间顺序，最后一条必须是用户说的
+     * @param current  已经攒出来的画像。**不要传 orDefaults() 过的**，否则"还没问过"会变成"已答"
+     * @throws LlmException 调用大模型本身失败（网络 / 超时 / 401 / 限流）
+     */
+    public PlanChatData chat(List<Message> messages, TravelParams current) {
+        TravelParams base = current == null
+                ? TravelParams.empty()
+                : current;
+        // 今天取一次就传下去，不在各处分别取 —— 否则一个请求跨过午夜时，
+        // prompt 里的"今天"和校验用的"今天"会不是同一天，出现"模型填的日期被判成过去"这种鬼事。
+        LocalDate today = LocalDate.now();
+        String prompt = buildPrompt(messages, base, today);
+        Exception lastError = null;
+
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            String raw;
+            try {
+                raw = chatModel.chat(attempt == 1 ? prompt : prompt + RETRY_HINT);
+            } catch (Exception e) {
+                // 调用本身失败不重试 —— 和 PlanComposer / FlyaiRunner 同一条规矩：
+                // 这类失败重试大概率还是失败，而用户已经等着了。把"要不要再试一次"还给他。
+                throw new LlmException("大模型调用失败：" + shortReason(e) + "，请稍后再试", e);
+            }
+
+            try {
+                Parsed parsed = parseModelText(raw);
+                // ⭐ 先洗净再合并：模型这一轮听出来的东西里，凡是"能机械判断对错"的，
+                //    都不直接采信 —— 见 sanitize 的注释。
+                TravelParams merged = base.mergedWith(sanitize(parsed.patch(), today));
+                log.info("对话一轮：原始输出 {} 字 → reply {} 字，画像 {} → {}",
+                        raw == null ? 0 : raw.length(), parsed.reply().length(),
+                        describe(base), describe(merged));
+                return new PlanChatData(parsed.reply(), merged);
+            } catch (Exception e) {
+                lastError = e;
+                log.warn("第 {} 次尝试：对话输出不是合法 JSON，原始输出前 300 字：{}",
+                        attempt, JsonText.truncate(raw, 300));
+            }
+        }
+
+        // 两次都没解析出来 —— 降级，不抛错（理由见类注释最后一段）
+        log.error("两轮都没解析出可用的对话结果，降级回一句兜底话术", lastError);
+        return new PlanChatData(FALLBACK_REPLY, base);
+    }
+
+    /* ============================================================
+     * 洗净 —— 对模型这一轮听出来的字段做机械校验
+     * ============================================================ */
+
+    static TravelParams sanitize(TravelParams patch) {
+        return sanitize(patch, LocalDate.now());
+    }
+
+    /**
+     * 把模型这一轮听出来的字段里**能机械判断对错**的部分修正掉。
+     *
+     * 为什么要有这一层，而不是只把 prompt 写清楚：
+     *   2026-10-13 用户在界面上真实走了一遍，两个 bug 都不是"模型不听话"——
+     *   模型是**严格照我们说的做的**：prompt 里的示例写着 `city："珠海"、"深圳周边"`，
+     *   它就输出了"广东周边"；prompt 里没提今天几号，它就猜了去年的年份。
+     *   这类错误的共同点：**它不可能靠"更努力地思考"避免**（模型不知道今天几号），
+     *   所以只能靠代码兜。而且 prompt 改好之后这一层也不能删 ——
+     *   因为 prompt 里的每条要求都是优化，不是保证。
+     *
+     * 只处理两个字段，而且都是"改掉比留着强"的那种：
+     *   city       —— 区域说法（"广东周边"）下游一条都查不到，留着等于给了一份注定空的检索。
+     *                 改成 null = "这个字段还没答"，于是模型下一轮会再问一次，用户有机会纠正。
+     *                 这比"替他猜一个城市"好：猜错了要重来一遍，问一次只要一句话。
+     *   origin     —— **和 city 完全同一类错**，所以用同一个判据处理。
+     *                 模型听到"从广东出发"、或者把"广东周边"同时填进两个字段，都是一样的事。
+     *                 为什么要单独想一遍而不是"顺手也做一样的事"：origin 是 2026-10-13 才加的，
+     *                 而那天的教训正是**加字段的时候最容易漏掉守门** ——
+     *                 city 有防线而 origin 没有，症状会是"换了个说法，同一个 bug 又回来了"。
+     *   startDate  —— 过去的日期顺延到最近的一次（用户说"11月17日"不可能指去年）。
+     *
+     * ⚠️ 为什么**不**在这里顺手过滤 preferences（比如只留下飞猪认得的类别）：
+     *   那是 RetrievalPlanner 的活，而且它的输入本来就该是用户的如实偏好 ——
+     *   preferences 是"用户想要什么"的记录，不是"我们要查什么"的命令。
+     *   在这里提前过滤，溯源面板上就会少掉"用户其实说过 X"这条信息。
+     *   **每个字段在哪一层被加工，取决于那一层是不是唯一知道该怎么做判断的人。**
+     *
+     * @param today 显式传，让它成为纯函数（能测"2026-10-13 那天会发生什么"）
+     */
+    static TravelParams sanitize(TravelParams patch, LocalDate today) {
+        if (patch == null) {
+            return null;
+        }
+        boolean cityUnusable = unusableCity(patch.city());
+        boolean originUnusable = unusableCity(patch.origin());
+
+        String rawDate = patch.startDate();
+        TravelDates.Normalized date = TravelDates.normalize(rawDate, today);
+        boolean dateDropped = rawDate != null && !rawDate.isBlank() && date.date() == null;
+
+        if (!cityUnusable && !originUnusable && !date.corrected() && !dateDropped) {
+            // 没问题就原样返回，连对象都不重建 —— 让"这一轮什么都没改"在引用上也是可判断的
+            return patch;
+        }
+        if (cityUnusable) {
+            log.info("模型把「{}」当城市填了 —— 它不是一个具体城市，已按'这个字段还没答'处理，"
+                    + "下一轮会让它重新问", patch.city());
+        }
+        if (originUnusable) {
+            log.info("模型把「{}」当出发地填了 —— 它不是一个具体城市，已按'这个字段还没答'处理",
+                    patch.origin());
+        }
+        if (date.corrected()) {
+            log.info("模型给的出发日期 {} 已经过去了，已顺延到 {}", rawDate, date.date());
+        }
+        if (dateDropped) {
+            log.info("模型给的出发日期 {} 解析不出来，已当作'还没听到'", rawDate);
+        }
+        return new TravelParams(
+                originUnusable ? null : patch.origin(),
+                cityUnusable ? null : patch.city(),
+                patch.days(),
+                date.date(),
+                patch.preferences(),
+                patch.pace(),
+                patch.childAge(),
+                patch.stroller()
+        );
+    }
+
+    /**
+     * "这个值不能拿去查飞猪"。
+     *
+     * 空值不算"不能用" —— 空的含义是"还没问过"，那是合法状态，不该在这里被判死。
+     * 判死的只有一种：**非空、但不是一个具体城市**（"广东周边""珠三角"）。
+     * 抽成一个方法是因为 city 和 origin 用的是同一条判断，而它们必须**永远**是同一条 ——
+     * 各写一遍的话，某天改了其中一句，症状会是"目的地挡住、出发地漏过"这种半截防线。
+     */
+    private static boolean unusableCity(String value) {
+        return value != null && !value.isBlank() && !CityNames.isSingleCity(value);
+    }
+
+    /* ============================================================
+     * 解析 —— 纯函数部分，单独抽出来就是为了能测
+     * ============================================================ */
+
+    /** 一次对话的解析结果 */
+    record Parsed(String reply, TravelParams patch) {
+    }
+
+    /**
+     * 把模型的原始输出解析成 { 话术, 画像补丁 }。
+     *
+     * 抽成包级可见的方法 + 不碰 chatModel，就使它成为**纯函数**：
+     * 测试里可以喂各种"模型可能会写出来的鬼东西"进去，
+     * 而不用真的花一次调用、等十几秒。
+     * 这和 PlanAssembler 能被单测是同一个道理 —— **可测性是设计出来的。**
+     *
+     * @throws Exception JSON 不合法（由调用方决定重试还是降级）
+     */
+    Parsed parseModelText(String raw) throws Exception {
+        RawChat node = objectMapper.readValue(JsonText.stripFences(raw), RawChat.class);
+
+        String reply = node.reply() == null || node.reply().isBlank()
+                ? FALLBACK_REPLY
+                : node.reply().strip();
+
+        return new Parsed(reply, node.params());
+    }
+
+    /**
+     * 模型输出的**原始形状**。
+     *
+     * 刻意不复用 TravelParams 直接反序列化 —— 因为要能容忍 `params` 整个缺失。
+     * 模型在"信息已经齐了"这一类回复里，有时会把 params 省略掉；
+     * 直接映射到 TravelParams 会得到 null，虽然也处理得了，但语义上分不清
+     * "模型说没有新信息"和"模型忘了写" —— 而这两件事在合并时**都是保留原值**，
+     * 所以结果一致，但把它显式写出来，读代码的人就不用自己去推这一层。
+     *
+     * ⚠️ 字段名 params / reply 必须和 prompt 里给的 JSON 例子逐字一致。
+     *    写成 params_ 或 data 都会解析成 null —— 而且**不会报错**，
+     *    只会得到一份"什么都没听出来"的对话。这类静默错位整份工程里出现过三次了。
+     */
+    record RawChat(String reply, TravelParams params) {
+    }
+
+    /* ============================================================
+     * Prompt 构造
+     * ============================================================ */
+
+    private String buildPrompt(List<Message> messages, TravelParams current, LocalDate today) {
+        return """
+                你是"童行"的带娃旅行规划助手。你的任务：**通过对话把出行信息问清楚**，并输出结构化结果。
+
+                【今天的日期】
+                今天是 %s。
+                用户说"11月17日""下个月""国庆去"这类**没带年份**的日期时，一律按这个日期去推年份，
+                推出的一定是**还没到来的那一天**。出发日期不可能在过去。
+                （推算示例：今天是 2026-10-13，用户说"11月17日"→ 2026-11-17；
+                  用户说"3月1日"→ 2027-03-01，因为今年的 3 月 1 日已经过了。）
+
+                【需要收集的字段】
+                - origin：**出发地城市**（用户从哪个城市走，"广州"、"深圳"）
+                - city：目的地**城市**（"珠海"、"广州"、"深圳"）
+                - days：出行天数（整数）
+                - startDate：出发日期，格式 YYYY-MM-DD（用户说"国庆去"，就填今年国庆的第一天）
+                - childAge：孩子年龄（整数）
+                - preferences：偏好，数组（["动物园","海边","室内"]）
+                - pace：节奏（"慢" / "中" / "快"）
+                - stroller：是否需要推车（true / false）
+
+                【为什么要问出发地 —— 这是这个产品的核心，请认真问】
+                用户是**带孩子出行，受不了长途奔波**。所以系统要给每一段城际交通设一个时长上限，
+                超了就会提醒他"这段路带娃太累"。而"一段"是「出发地→目的地」和「目的地→出发地」，
+                **没有出发地，这两段就不存在，这条最重要的约束就完全失效了。**
+                所以 origin 必须问到，一个字都不能省 —— 它和城市、天数一样是必答项。
+
+                【对话原则】
+                1. 每轮回复不超过两句话，口语化、温暖，像朋友聊天。
+                2. 每轮只问 1~2 个**还缺**的参数，不要一次问完，也不要重复问已经有的。
+                   问出发地时可以自然地连着问目的地："你们从哪个城市出发，想去哪儿玩呀？"
+                3. 用户表达了偏好就提炼成简短关键词（"孩子喜欢看鱼"→ preferences 里加"海洋馆"）。
+                4. 信息齐全时，回复："信息已经齐了，点「生成行程」就可以了"。
+                5. ⚠️ **不要编造用户没说过的信息。** 没听出来的字段一律写 null。
+                   特别注意 stroller 的三种写法含义完全不同，不要混用：
+                     · null   = 还没问到（**大多数情况下用这个**）
+                     · true   = 用户明确说需要
+                     · false  = 用户明确说不需要
+                   把"还没问"写成 false，会让系统以为用户已经答过了，从此再不问他推车的事。
+                6. 用户在纠正之前的说法（"不是 3 天，是 4 天"）时，按新的来。
+                7. ⚠️ **origin 和 city 都只能填"一个具体城市"，区域说法一律不能填进任何一个。**
+                   用户说"广东周边""珠三角""深圳附近""海边"这类**一片地方**的时候：
+                     · **不要**把它抄进 city 或 origin —— 系统拿它去查，一条结果都查不到，
+                       整个行程会排不出来。
+                     · 目的地那一侧：根据他的偏好**替他挑一个最合适的城市**填进 city，
+                       并在回复里用半句话说清你按哪儿安排（例："我先按珠海给你安排，那边海边和长隆都合适"）。
+                     · 出发地那一侧：**不要替他挑**。出发地是"他家在哪"，这不可能猜得出来，
+                       必须问。只有他明确说了城市名才填。
+                     · 两个字段都**只能有一个城市**，不要写"珠海、广州"或"珠海/广州"这种。
+                   选目的地的参考：亲子+海边 → 珠海；亲子+动物园+大城市 → 广州。
+                8. 出发地和目的地**相同**是合法的（本地游），不要为了不同而改掉其中一个。
+
+                【已经收集到的信息】
+                %s
+
+                【对话历史】
+                %s
+
+                【输出要求】
+                只输出一个 JSON 对象，不要任何解释文字，不要 markdown 代码块标记。
+                {
+                  "reply": "你要对用户说的话",
+                  "params": {
+                    "origin": "出发城市名" 或 null,
+                    "city": "目的地城市名" 或 null,
+                    "days": 天数 或 null,
+                    "startDate": "YYYY-MM-DD" 或 null,
+                    "childAge": 年龄 或 null,
+                    "preferences": ["偏好"] 或 [],
+                    "pace": "慢/中/快" 或 null,
+                    "stroller": true/false 或 null
+                  }
+                }
+
+                ⚠️ params 里**只写这一轮新听出来的字段**，其余一律写 null ——
+                系统会自动和已有信息合并，你不需要复述历史。
+                """.formatted(todayText(today), renderCollected(current), renderHistory(messages));
+    }
+
+    /**
+     * 把今天渲染成"2026-10-13（星期二）"。
+     *
+     * 用 ISO 格式而不是"2026年10月13日"：因为**输出的格式就是我们要它写的格式**。
+     * 让 prompt 里示范的写法 == 契约要求的写法，模型就不用做一次格式转换 ——
+     * 而"多做一次转换"就是多一个写错的机会（它可能写成"2026/10/13"或"10月13日"）。
+     */
+    private static String todayText(LocalDate today) {
+        String[] week = {"星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"};
+        return today + "（" + week[today.getDayOfWeek().getValue() - 1] + "）";
+    }
+
+    /**
+     * 把已收集的画像渲染成人话。
+     *
+     * 为什么不直接扔 JSON：`"stroller": null` 对模型来说是"一个叫 stroller 的字段值是空的"，
+     * 而"**还没问过**"这个语义只有人话能表达 —— 前者模型可能读成"不需要"，
+     * 后者它才知道该继续问。这是 PlanComposer.renderParams 用的同一条规矩。
+     *
+     * 和 PlanComposer 那份的唯一区别：那边天数已经有默认值（3 天），所以能写"未提供（按 3 天）"；
+     * 这边**必须诚实地说"还没问过"**，一个默认值都不能提前给。
+     */
+    private static String renderCollected(TravelParams p) {
+        List<String> lines = new ArrayList<>();
+        lines.add("出发地：" + answer(p.origin()));
+        lines.add("目的地：" + answer(p.city()));
+        lines.add("天数：" + (p.days() == null || p.days() <= 0 ? "还没问过" : p.days() + " 天"));
+        lines.add("出发日期：" + answer(p.startDate()));
+        lines.add("孩子年龄：" + (p.childAge() == null || p.childAge() <= 0 ? "还没问过" : p.childAge() + " 岁"));
+        lines.add("节奏：" + answer(p.pace()));
+        lines.add("是否需要推车：" + (p.stroller() == null ? "**还没问过**" : (p.stroller() ? "需要" : "不需要")));
+        lines.add("用户偏好：" + (p.preferences() == null || p.preferences().isEmpty()
+                ? "还没问过" : String.join("、", p.preferences())));
+        return String.join("\n", lines);
+    }
+
+    /** 还没问到 —— 用一个明确的词，而不是空白。空白会让模型以为这一行是排版错误 */
+    private static String answer(String s) {
+        return s == null || s.isBlank() ? "还没问过" : s.strip();
+    }
+
+    /**
+     * 把对话历史渲染成文本。
+     *
+     * 用"用户：/助手："而不是 JSON：这段是要模型**顺着话头接下去**的，
+     * 人话的角色前缀比 `{"role":"user"}` 更接近它预训练时见过的对话格式。
+     * （真要给它原生多轮结构，确实更"正规"，但那需要按角色拆成多条消息发给 API，
+     * 而我们现在只有 chat(String) 这一个入口 —— 不值得为这一点点收益换掉整个调用方式。）
+     */
+    private static String renderHistory(List<Message> messages) {
+        if (messages == null || messages.isEmpty()) {
+            return "（还没有对话，这是第一轮）";
+        }
+        StringBuilder sb = new StringBuilder();
+        for (Message m : messages) {
+            sb.append(m.isUser() ? "用户：" : "助手：").append(m.content()).append('\n');
+        }
+        return sb.toString().stripTrailing();
+    }
+
+    /** 重试时追加的话 —— 必须说清上次错在哪，只说"请重试"没有用 */
+    private static final String RETRY_HINT = """
+
+
+            【注意】你上一次的输出不是合法 JSON，系统无法解析。
+            这次请**只输出一个 JSON 对象**：不要任何解释文字，不要 markdown 代码块标记（不要 ```）。
+            """;
+
+    /** 日志里用一句话描述画像，别把整个对象打出来 */
+    private static String describe(TravelParams p) {
+        return "{origin=" + p.origin() + ", city=" + p.city() + ", days=" + p.days() + ", startDate=" + p.startDate()
+                + ", childAge=" + p.childAge() + ", pace=" + p.pace()
+                + ", stroller=" + p.stroller() + ", prefs=" + p.preferences() + "}";
+    }
+
+    /** 从异常里取一句能给用户看的话，别把整个堆栈吐到接口上 */
+    private static String shortReason(Exception e) {
+        String m = e.getMessage();
+        if (m == null || m.isBlank()) {
+            return e.getClass().getSimpleName();
+        }
+        return JsonText.truncate(m.lines().findFirst().orElse(m), 120);
+    }
+}

@@ -1,0 +1,44 @@
+# ── 依赖与构建产物（可再生产，别进仓库）─────────────────────────
+node_modules/
+dist/
+dist-ssr/
+target/
+*.class
+
+# ── 日志 ────────────────────────────────────────────────────
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ── 本地环境覆盖（可能含密钥，绝不提交）───────────────────────
+*.local
+.env.local
+.env.*.local
+
+# ── 编辑器 / 系统 ───────────────────────────────────────────
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ── 本机临时 / 可再生的东西 ──────────────────────────────────
+# node 的编译缓存
+.node-compile-cache/
+
+# 回退快照：它是"上 git 之前的手工版控制"，git 本身就是干这个的
+_rollback/
+
+# 验收截图（约 2.8M）：探针跑一遍就能重新生成
+_probe/shots/*.png
+
+# 预跑缓存（约 300K）：里面是真实上游返回，跑一次 prerun.mjs 就有了
+_probe/flyai-cache.json
