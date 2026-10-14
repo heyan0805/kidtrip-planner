@@ -100,6 +100,7 @@ cd frontend && npm install && npm run dev
 ```
 kidtrip-learn/
 ├─ backend/                    Spring Boot 4.1 · Java 21（端口 8003）
+│  ├─ README.md                后端说明（怎么跑、接口、配置、测试、部署注意）
 │  └─ src/main/java/com/hellen/kidtrip/
 │     ├─ flyai/                飞猪 CLI 的进程调用与原始响应形状
 │     ├─ retrieval/            检索层：限流、缓存、去重、车次挑选
