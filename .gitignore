@@ -40,6 +40,14 @@ _rollback/
 # 验收截图（约 2.8M）：探针跑一遍就能重新生成
 _probe/shots/*.png
 
+# Java 探针（PersonaProbe）的构建产物与本机依赖清单：
+# cp.txt 里是本机 maven 仓库的绝对路径（换台机器就不同），classes/.probe-args 是编译输出，
+# out/ 是每次跑出来的报告 —— 三个都是"跑一次就有"的东西，都不是项目的一部分。
+_probe/classes/
+_probe/.probe-args
+_probe/cp.txt
+_probe/out/
+
 # 预跑缓存（约 300K）：里面是真实上游返回，跑一次 prerun.mjs 就有了
 # 探针实例用的是副本（`-probe`），同样不进仓库 —— 它只是为了避免两个进程抢同一个文件
 _probe/flyai-cache.json
