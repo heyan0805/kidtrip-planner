@@ -257,7 +257,7 @@ public class PlanService {
                     List.of(),
                     List.of());
         } else {
-            PlanDraft draft = composer.draft(params, pois, hotels, rules, legs);
+            PlanDraft draft = composer.draft(params, request.personaOrEmpty(), pois, hotels, rules, legs);
             assembled = PlanAssembler.assemble(draft, pois, hotels, params, rules);
         }
 
@@ -277,6 +277,14 @@ public class PlanService {
         // 备选讲"住哪儿"，正好是一天的两个落点。
         days = attachHotelAlternatives(days, hotelStaysOf(pool.candidates()));
         warnLegConflicts(days, legs, legWarnings);
+
+        // ── 每天那句"为什么这么排"（2026-10-15）───────────────────────────
+        // 它是**最后一个**后处理，而且顺序不能动：理由里要用到上面两步挂上去的东西
+        // （车次的真实时刻、"昨晚住哪"），也要用到装配出来的点。排在前面不会报错，
+        // 只会让理由**集体变少** —— 那种错一句提示都没有，只能靠这一行的位置保证。
+        // persona 从请求里来（前端把对话那一步攒出来的原样带回来），不看它也能算，
+        // 只是少掉"引用用户原话"那一层。
+        days = DayReasons.attachWhy(days, request.personaOrEmpty(), rules, params);
 
         // ── 地理跨度：排完之后拿真实坐标回头校一遍（B11）──────────────────
         // 和首尾两天那两条是同一个理由：prompt 已经尽力了（每家酒店到候选景点的距离
@@ -425,14 +433,14 @@ public class PlanService {
             TravelDay first = days.get(0);
             withLegs.set(0, new TravelDay(first.day(), first.theme(), first.spots(),
                     legs.outbound().primary(), legs.outbound().alternatives(), first.hotel(),
-                    first.hotelAlternatives()));
+                    first.hotelAlternatives(), first.why()));
         }
         if (legs.inbound().primary() != null) {
             int last = days.size() - 1;
             TravelDay day = days.get(last);
             withLegs.set(last, new TravelDay(day.day(), day.theme(), day.spots(),
                     legs.inbound().primary(), legs.inbound().alternatives(), day.hotel(),
-                    day.hotelAlternatives()));
+                    day.hotelAlternatives(), day.why()));
         }
         return withLegs;
     }
@@ -469,7 +477,7 @@ public class PlanService {
         for (TravelDay d : days) {
             String chosen = d.hotel() == null ? null : d.hotel().hotelId();
             out.add(new TravelDay(d.day(), d.theme(), d.spots(), d.transfer(), d.alternatives(),
-                    d.hotel(), hotelAlternativesOf(hotelPool, chosen)));
+                    d.hotel(), hotelAlternativesOf(hotelPool, chosen), d.why()));
         }
         return out;
     }
@@ -752,8 +760,13 @@ public class PlanService {
      *
      * 丢掉的话，它前后的两个点会"隔着它"变成相邻 —— 而它们现实中并不相邻，
      * 那等于凭空造出一段不存在的路。
+     *
+     * ⚠️ 包级可见（不是 private）：{@link DayReasons} 也要按同一个顺序取"第一个/最后一个点"。
+     *    复制一份过去的话，两处对"相邻两点"的理解会在某次改动后悄悄分叉 ——
+     *    而它们算的是**同一天的同一件事**（一处报距离警告，一处解释这一天为什么轻松），
+     *    分叉的症状是同一份行程在警告里说"太远"、在理由里说"走两步就到"。
      */
-    private static List<TravelSpot> sortedByTime(TravelDay day) {
+    static List<TravelSpot> sortedByTime(TravelDay day) {
         List<TravelSpot> ordered = new ArrayList<>(day.spots());
         Comparator<LocalTime> byClock = Comparator.nullsLast(Comparator.naturalOrder());
         ordered.sort(Comparator.comparing(s -> timeOfSpot(s.time()), byClock));
@@ -845,8 +858,10 @@ public class PlanService {
      * 用**定长截取**而不是解析成 LocalDateTime：这个字符串的形状由 LegService.isoMinutes 保证
      * （契约里就是 ISO 到分钟），截取不会因为时区、夏令时之类的东西被别的东西影响。
      * 形状不对就回 null —— 校验宁可漏一条，也不要拿半个时刻去比大小，那会报出一句假警告。
+     *
+     * ⚠️ 包级可见：{@link DayReasons} 里"去程 10:39 到站"那个时刻走的是**同一个**解析。
      */
-    private static LocalTime timeOf(String isoMinutes) {
+    static LocalTime timeOf(String isoMinutes) {
         if (isoMinutes == null || isoMinutes.length() < 16) {
             return null;
         }
@@ -863,8 +878,10 @@ public class PlanService {
      * 用宽松的 "H:mm" 而不是 LocalTime.parse 的默认格式：模型偶尔会写 "9:30"（不带前导零），
      * 用默认格式会解析失败 —— 而这里的失败是**静默的**（我们只是不校验了），
      * 那等于对最早出发的那一天放手不管。能容的就容掉。
+     *
+     * ⚠️ 包级可见：{@link DayReasons} 也要读模型写的 "HH:mm"（第一个点几点、排在几点收尾）。
      */
-    private static LocalTime timeOfSpot(String raw) {
+    static LocalTime timeOfSpot(String raw) {
         if (raw == null || raw.isBlank()) {
             return null;
         }

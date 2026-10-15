@@ -28,6 +28,7 @@ class ChatServiceTest {
     private static final class CapturingComposer extends ChatComposer {
         private List<Message> seenMessages;
         private TravelParams seenParams;
+        private Persona seenPersona;
         private int calls = 0;
 
         CapturingComposer() {
@@ -35,11 +36,12 @@ class ChatServiceTest {
         }
 
         @Override
-        public PlanChatData chat(List<Message> messages, TravelParams current) {
+        public PlanChatData chat(List<Message> messages, TravelParams current, Persona currentPersona) {
             calls++;
             this.seenMessages = messages;
             this.seenParams = current;
-            return new PlanChatData("好", current);
+            this.seenPersona = currentPersona;
+            return new PlanChatData("好", current, currentPersona);
         }
     }
 
@@ -57,7 +59,7 @@ class ChatServiceTest {
         ChatService svc = new ChatService(new CapturingComposer());
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> svc.chat(new PlanChatRequest(List.of(), null)));
+                () -> svc.chat(new PlanChatRequest(List.of(), null, null)));
 
         assertTrue(e.getMessage().contains("messages 不能为空"), e.getMessage());
     }
@@ -68,7 +70,7 @@ class ChatServiceTest {
         ChatService svc = new ChatService(new CapturingComposer());
 
         assertThrows(IllegalArgumentException.class,
-                () -> svc.chat(new PlanChatRequest(null, null)));
+                () -> svc.chat(new PlanChatRequest(null, null, null)));
     }
 
     @Test
@@ -78,7 +80,7 @@ class ChatServiceTest {
         List<Message> history = List.of(user("想去珠海"), assistant("玩几天？"));
 
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> svc.chat(new PlanChatRequest(history, null)));
+                () -> svc.chat(new PlanChatRequest(history, null, null)));
 
         assertTrue(e.getMessage().contains("最后一条"), e.getMessage());
     }
@@ -90,7 +92,7 @@ class ChatServiceTest {
         List<Message> history = List.of(user("想去珠海"), new Message("user", "   "));
 
         assertThrows(IllegalArgumentException.class,
-                () -> svc.chat(new PlanChatRequest(history, null)));
+                () -> svc.chat(new PlanChatRequest(history, null, null)));
     }
 
     @Test
@@ -101,7 +103,7 @@ class ChatServiceTest {
         TravelParams current = new TravelParams(null, "珠海", null, null, null, null, null, null);
         List<Message> history = List.of(user("想去珠海"), assistant("玩几天？"), user("3 天"));
 
-        svc.chat(new PlanChatRequest(history, current));
+        svc.chat(new PlanChatRequest(history, current, Persona.empty()));
 
         assertEquals(1, composer.calls);
         assertEquals(3, composer.seenMessages.size(), "整段上下文都要传下去");
@@ -115,7 +117,7 @@ class ChatServiceTest {
         CapturingComposer composer = new CapturingComposer();
         ChatService svc = new ChatService(composer);
 
-        svc.chat(new PlanChatRequest(List.of(user("想去珠海")), null));
+        svc.chat(new PlanChatRequest(List.of(user("想去珠海")), null, Persona.empty()));
 
         assertNull(composer.seenParams.days(),
                 "天数必须是'还没问过'，不能变成 3 —— 否则模型以为天数已经确定，再也不问");
@@ -134,7 +136,7 @@ class ChatServiceTest {
         }
         history.add(user("最后一句"));            // 本轮提问 —— 最后一条必须是用户说的
 
-        svc.chat(new PlanChatRequest(history, null));
+        svc.chat(new PlanChatRequest(history, null, null));
 
         List<Message> sent = composer.seenMessages;
         assertEquals(24, sent.size(), "31 条里保留最新 24 条");
@@ -145,13 +147,38 @@ class ChatServiceTest {
     }
 
     @Test
+    @DisplayName("⭐ 上一轮攒的判断也要原样交给模型 —— 不传下去的话卡片每轮都从零开始")
+    void passesPersonaDown() {
+        CapturingComposer composer = new CapturingComposer();
+        ChatService svc = new ChatService(composer);
+        Persona previous = Persona.of(List.of(
+                new Persona.Inference("walking", "少走路", "我想安排得放松一点")));
+        List<Message> history = List.of(user("想去珠海"), assistant("玩几天？"), user("3 天"));
+
+        svc.chat(new PlanChatRequest(history, null, previous));
+
+        assertEquals("少走路", composer.seenPersona.valueOf("walking"));
+    }
+
+    @Test
+    @DisplayName("没给 currentPersona → 归一成空 persona，不是 null（下游只判空不判 null）")
+    void missingPersonaBecomesEmpty() {
+        CapturingComposer composer = new CapturingComposer();
+        ChatService svc = new ChatService(composer);
+
+        svc.chat(new PlanChatRequest(List.of(user("想去珠海")), null, null));
+
+        assertTrue(composer.seenPersona.isEmpty());
+    }
+
+    @Test
     @DisplayName("单条消息超长 → 截断，不能让一个粘贴的长文把 prompt 撑爆")
     void truncatesHugeMessage() {
         CapturingComposer composer = new CapturingComposer();
         ChatService svc = new ChatService(composer);
         String huge = "水".repeat(5000);
 
-        svc.chat(new PlanChatRequest(List.of(new Message("user", huge)), null));
+        svc.chat(new PlanChatRequest(List.of(new Message("user", huge)), null, Persona.empty()));
 
         String sent = composer.seenMessages.get(0).content();
         assertTrue(sent.length() < 2100, "长度应该被压到 2000 出头，实际 " + sent.length());

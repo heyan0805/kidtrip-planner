@@ -108,6 +108,31 @@ try {
     `⭐ 必填的五项都齐了（现在有 ${filled.length} 项有值）—— 缺一项就点不动生成`,
     JSON.stringify(profile))
 
+  /* ── persona 卡（我这样理解你）─────────────────────────────────
+   * 2026-10-15 加。推论必须看得见：错了他不会纠正（他以为你懂他），
+   * 所以唯一的安全网就是把"我们推了什么"亮在屏幕上、每条挂他的原话。
+   * 这里验的不只是"画出来了"，还有**空的时候要安静** ——
+   * 没聊到偏好就挂一张空卡说"我还不懂你"，那是噪声不是提示。 */
+  console.log('')
+  console.log('【我这样理解你】persona 卡的渲染')
+  const beforePersona = await page.innerText('body')
+  check(!beforePersona.includes('我这样理解你'),
+    '⭐ 还没聊到偏好时这张卡不存在（空 = 安静，不是挂着一张空卡说"我还不懂你"）')
+
+  // 一句话带两个偏好信号（轻松 → 怕走路；排队 → 怕人多），一次验"多推论"和"引用原话"
+  await send('这次想安排得轻松一点，别去人太多的网红点排队')
+  const asideText = await page.innerText('aside')
+  check(asideText.includes('我这样理解你'), '⭐ 说了一句带偏好的话之后卡片出现了')
+  check(asideText.includes('怕走路') && asideText.includes('少走路'),
+    '⭐ 推出来的判断画出来了（怕走路 · 少走路）',
+    asideText.slice(asideText.indexOf('我这样理解你')))
+  check(asideText.includes('怕人多') && asideText.includes('避开人多'),
+    '⭐ 一句话推出来的两条都在（怕人多 · 避开人多）')
+  check(asideText.includes('你说过') && asideText.includes('轻松一点'),
+    '⭐ 每条都挂着他的原话（依据是后端逐字验证过才放行的，卡片上直接引用）')
+  check(asideText.includes('推错了就直接说'),
+    '⭐ 卡片上写明了纠正方式（用话纠正，不是让他找设置页）')
+
   await page.click('button:has-text("生成行程")')
   await page.waitForFunction(() => !document.body.innerText.includes('正在生成'), null, {
     timeout: 60_000,
@@ -230,6 +255,25 @@ try {
   check(iHotelRow >= 0 && iAltRow > iHotelRow,
     '⭐ 顺序是"主选酒店 → 备选"（备选紧跟它回答的那个问题，不飘到别处）',
     `🏨@${iHotelRow} 备选@${iAltRow}`)
+
+  /* ── 每天那句「为什么这么排」──────────────────────────────────
+   * 2026-10-15 加。理由是模板拼的、数字来自本地事实 —— 但对界面来说
+   * 要验的是三件事：有理由的天画出来、没理由的天**不硬凑**、
+   * 理由和这张卡自己的事实对得上（对不上的理由比没有更糟）。 */
+  console.log('')
+  console.log('【为什么这么排】每天的 why')
+  const whyCount = cards.reduce((n, c) => n + (c.text.match(/💡/g)?.length ?? 0), 0)
+  check(whyCount === 2,
+    '⭐ 3 天只有 2 句理由（最后一天没有可说的就给 null，不硬凑一句）',
+    `💡 在行程卡里出现 ${whyCount} 次`)
+  check(day1.includes('💡') && day1.includes('出站进城的缓冲'),
+    '⭐ 第 1 天的理由和它自己的事实对得上（09:29 到站 → 第一个点 10:30 才开始）',
+    day1.slice(0, 180))
+  check((cards[1]?.text ?? '').includes('💡') && (cards[1]?.text ?? '').includes('连住同一家酒店'),
+    '⭐ 第 2 天说的是连住（和它住宿那行"连住不用收拾行李"是同一件事，不是装饰句）')
+  check(!lastDay.includes('💡'),
+    '⭐ 最后一天没有理由行（不是每天都欠一句解释）',
+    lastDay.slice(0, 140))
 
   /* ── ②b ⭐ 「换一个」在降级路上也得能用 ─────────────────────── */
   // 理由和第 ② 条同源：这份假数据存在的意义是"出事那天顶上去"，

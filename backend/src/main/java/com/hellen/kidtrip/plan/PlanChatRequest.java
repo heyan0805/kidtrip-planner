@@ -5,9 +5,21 @@ import java.util.List;
 /**
  * `POST /api/plan/chat` 的请求体。**这就是"上下文传递"的后端一侧**。
  *
- * 两个字段，缺一个对话就进行不下去：
- *   messages      —— 到目前为止的**全部对话**（用户说的 + 助手说的），不含本轮提问
- *   currentParams —— 到目前为止**已经攒出来的画像**
+ * 三个字段，各自都是"这一轮要接着往下聊"所必需的：
+ *   messages       —— 到目前为止的**全部对话**（用户说的 + 助手说的），不含本轮提问
+ *   currentParams  —— 到目前为止**已经攒出来的画像**
+ *   currentPersona —— 到目前为止**已经从他的话里推出来的判断**（2026-10-15 加）
+ *
+ * ── currentPersona 为什么也要带回来 ──────────────────────────────
+ *   因为 persona 是**增量合并**的（见 Persona.mergedWith），而合并需要"截至目前为止"那一份。
+ *   不带回来的话，每一轮都会从空 persona 开始 —— 上一轮推出的判断下一轮就没了，
+ *   而模型看到的【已经推出来的判断】永远是空的，也就永远做不了"改主意"这件事。
+ *
+ *   ⚠️ 和 currentParams 是同一条规矩：**原样带回来**，不要自己加工。
+ *      谁做的合并，谁负责那份完整状态。
+ *
+ *   它**可以不给**（第一轮对话，或者调用方只关心画像）—— 缺省时按"还没有任何判断"处理。
+ *   但和 currentParams 一样，**不要自己塞一个默认值**。
  *
  * 为什么不带 sessionId / 不存服务端会话：
  *   因为"上下文"在这套设计里是**客户端持有的一份状态**，服务端每次是无状态地重算。
@@ -23,11 +35,22 @@ import java.util.List;
  */
 public record PlanChatRequest(
         List<Message> messages,
-        TravelParams currentParams
+        TravelParams currentParams,
+        Persona currentPersona
 ) {
 
     public List<Message> messagesOrEmpty() {
         return messages == null ? List.of() : List.copyOf(messages);
+    }
+
+    /**
+     * 上一轮攒下来的判断；没给就是"还没有"。
+     *
+     * 归一成 empty() 而不是留 null，是为了让调用方只判空、不判 null ——
+     * 少一个三态就少一类漏判（这条和 Persona.Inference 把 null 归一成空串是同一个取舍）。
+     */
+    public Persona currentPersonaOrEmpty() {
+        return currentPersona == null ? Persona.empty() : currentPersona;
     }
 
     /**

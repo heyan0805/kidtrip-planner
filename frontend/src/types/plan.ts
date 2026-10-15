@@ -61,6 +61,48 @@ export interface TravelParams {
 export interface PlanChatData {
   reply: string
   params: TravelParams
+  /**
+   * 我们从他的话里**推**出来的判断（2026-10-15 加）。和 params 的分界线：
+   *   params  —— 他**说过**的事实（"9 天""想去珠海"），错了他会纠正；
+   *   persona —— 我们**推**的偏好（"怕走路""要午睡"），错了他**以为你懂他，全程不报错**。
+   * 所以 persona 的每条都带 evidence（他的原话，后端逐字验证过才放行），
+   * 前端展示时把原话一起亮出来 —— 让"我怎么理解你"变成看得见、可纠正的东西。
+   *
+   * 永远非 null（没有判断就是空数组）。
+   */
+  persona: Persona
+}
+
+/**
+ * 一条**过了闸门的**推论：value 是我们概括的，evidence 是他自己的原话。
+ * evidence 能进 Persona，是因为后端在对话历史里逐字找到过它 ——
+ * 所以卡片上可以放心地把它当"用户原话"展示，不需要前端再验证一遍。
+ */
+export interface PersonaInference {
+  /** 维度 key（后端闭集，就这五个） */
+  key: 'walking' | 'crowd' | 'rest' | 'budget' | 'interest'
+  /** 我们推的判断，如「少走路」 */
+  value: string
+  /** 他的原话（截取的那一小段），如「我想有一个放松的旅行」 */
+  evidence: string
+}
+
+/**
+ * key 的中文名（卡片上用）。**必须和后端 PersonaTrait 的 label 一致** ——
+ * 两边各写一份是有意的：这五个词是产品语言不是技术实现，改它属于产品决策，
+ * 改的时候应该两边一起被人工过目，而不是一处改动静默生效。
+ */
+export const PERSONA_LABELS: Record<PersonaInference['key'], string> = {
+  walking: '怕走路',
+  crowd: '怕人多',
+  rest: '要午睡',
+  budget: '预算敏感',
+  interest: '孩子的兴趣',
+}
+
+/** 我们对这个用户的理解。空数组 = 还没推出来任何判断 */
+export interface Persona {
+  inferences: PersonaInference[]
 }
 
 /**
@@ -84,6 +126,12 @@ export interface PlanChatData {
 export interface PlanChatRequest {
   messages: Message[]
   currentParams?: TravelParams
+  /**
+   * 上一轮推出来的 persona，**原样带回来** —— 和 currentParams 是同一个道理：
+   * 合并在后端做（同 key 覆盖、没提到的保留），前端不要替它做减法。
+   * 第一次对话时不给。
+   */
+  currentPersona?: Persona
 }
 
 /**
@@ -413,6 +461,20 @@ export interface TravelDay {
    *    那个合并本来就在做（见页面里的 mergeStays）。
    */
   hotelAlternatives: HotelStay[]
+  /**
+   * **今天为什么是这个形状**（2026-10-15 加）。后端从本地算得出的事实拼出来：
+   * "去程 10:39 到站，所以今天第一个点排在 12:00""3 个点都在 1.2 公里内，走两步就到"。
+   *
+   * 注意两个设计：
+   *   · 这句**不是模型写的** —— 理由里每个数字（公里数、时刻、点数）都是后端
+   *     真算过的。模型写理由会写出"这里不需要走很多路"这种没法核实的话。
+   *   · 引用的用户原话（"你说过「…」，所以…"）**方向对得上才出现** ——
+   *     他说"体力好"的时候，绝不会拿这句当"今天排得轻松"的理由。
+   *
+   * null = 今天没有任何值得解释的形状，**不是错误**：
+   * 后端宁可空着也不兜底一句"为了让你轻松"那种对任何一天都成立的废话。
+   */
+  why: string | null
 }
 
 /** 被规则筛掉的候选。不是偷偷丢掉，而是记账 —— 用户有权知道筛掉了什么、为什么 */
@@ -556,4 +618,10 @@ export interface PlanGenerateRequest {
   params: TravelParams
   retrieval?: RetrievalPlan
   maxTicketPriceYuan?: number
+  /**
+   * chat 攒出来的 persona（**原样递过来**）。编排层把它带进 prompt 让模型参考，
+   * 但它**只影响取舍，不改变事实** —— 180 分钟上限、距离红线这些硬规则 persona 动不了。
+   * 没聊出任何判断就不传，后端当空处理。
+   */
+  persona?: Persona
 }

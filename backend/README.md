@@ -5,7 +5,7 @@
 
 - Spring Boot **4.1.1** · Java **21** · LangChain4j **1.18.1** · DeepSeek（`deepseek-chat`）
 - 端口 **8003**（参照工程是 8002，两个可以同时跑）
-- 65 个源文件 / 9050 行 · 25 个测试类 / **335** 个用例
+- 66 个源文件 / 9731 行 · 26 个测试类 / **369** 个用例
 
 > 前端说明见 [`../frontend/README.md`](../frontend/README.md)；
 > 想先看整体架构和产品原则，读仓库根的 [`../README.md`](../README.md)。
@@ -187,9 +187,10 @@ chat 的产物 `params` 正好是 generate 的入参，前端原样递过去即�
 字段故意叫 `alternatives` 而不叫 `flight`：以后要加大巴、轮渡，加的是一类**备选走法**，
 契约不用跟着改。
 
-⚠️ `Persona` / `PersonaTrait` / `PersonaGuard` 也在 `plan` 包，但**目前还不是对外契约** ——
-它们现在**没有任何调用方**（见第 6 节 ⑨，这一轮只落了纯逻辑 + 单测）。
-等 `PlanChatData` 真的把 persona 透给前端时，才轮到在前端 `types/plan.ts` 里补镜像。
+⚠️ `Persona` / `PersonaTrait` / `PersonaGuard` 也在 `plan` 包。2026-10-15 起它们**已是对外契约**：
+`PlanChatData.persona` 透给前端、`PlanGenerateRequest.persona` 带回来、`PlanComposer` 渲染
+【我对这个用户的判断】段（前端 `types/plan.ts` 已有镜像）。`DayReasons` 同一轮加进 `plan` 包，
+产出 `TravelDay.why`（契约第 8 个字段）。
 
 ### 三个 Composer 的分工
 
@@ -376,12 +377,23 @@ prompt 里不给模型经纬度数字（让 LLM 比两串坐标是碰运气）�
     （像 `CandidateCodes.STAY_NONE` 那样）—— 那是另一层复杂度，本轮不做。
     用户侧还有一条不依赖模型的路：卡片上那条可以直接删。
 
-- **明确的边界（这一轮只做到哪）**：只落了三个**纯 static、零依赖、可单测**的类
-  （`PersonaTrait` / `Persona` / `PersonaGuard`，48 个用例）+ 三组反证。
-  **还没接进链路** —— `ChatComposer` 还没让它输出 `persona[]`、`PlanChatData` 还没透出、
-  `PlanComposer` 还没有【我对这个用户的判断】那一段、前端还没有「我这样理解你」卡片。
-  先做这三件是因为它们是**唯一"做错了白做"的部分**：先跑通一次真实对话看模型实际能推出什么、
-  `evidence` 的命中率有多少，那一步的数据决定后面 prompt 和前端该怎么写。
+- **接链路（2026-10-15 第二轮）**：第一轮只落了三个纯 static 类（`PersonaTrait` / `Persona` /
+  `PersonaGuard`，48 个用例）+ 探针实测；第二轮把整条路接通 ——
+  `ChatComposer.chat()` 多收一个 `currentPersona`、prompt 带【可以记的维度】和【已经推出来的判断】、
+  输出 schema 加 `persona[]`，解析后**先过 `PersonaGuard.screen(messages)` 再合并**；
+  `PlanChatData.persona` 透给前端；`PlanGenerateRequest.persona` 在生成时带回来；
+  `PlanComposer` 渲染【我对这个用户的判断】段（每条带原话），并加一条硬性要求
+  （理由里出现的数字必须来自候选行/车次行给过的事实）。
+  端到端验收（`_probe/verify-l1-ui.mjs`，30/30）：假模型输出 persona → **真闸门逐字回查真对话**
+  → 合并 → 契约 → 前端卡片；排程 prompt 里真的出现了那一段和用户原话。
+
+  **每天那句理由（`TravelDay.why`）刻意不交给模型写**（`plan/DayReasons.java`，21 个用例）：
+  理由里出现的任何可核实事实（到站时刻、当天跨度、点数、连住、发车时刻）必须来自本地算得出
+  的东西 —— `Geo` 已经算过距离、`Legs` 已经算过车次、`PlanRules` 知道常规点数。
+  persona 在这里只做一件事：**引用用户原话**，而且要判方向（`leansRelaxed` 排除
+  "无所谓 / 不介意 / 不用"）—— 否则用户说过"体力很好"，会被引用成"今天排得轻松"的理由，
+  **引用着真原话说假话**，界面上完全看不出来。上限 2 句、没有可说的事实就返回 null
+  （缺坐标的天宁可不说，也不拿算得出的几段下结论）。
   另外三件**不做**：persona 不进检索条件（那会变成"推论 → 少查了几个类别"，错了看不见还多花额度）、
   persona 不覆盖硬规则（180 分钟上限、距离红线是产品的身份证）、不做跨会话记忆
   （项目没有用户体系，别为了它引入身份存储 —— 那是隐私问题，而收益只在第二次打开时才出现）。
@@ -441,18 +453,19 @@ prompt 里不给模型经纬度数字（让 LLM 比两串坐标是碰运气）�
 
 ```bash
 cd backend
-mvn test          # 335 个用例
+mvn test          # 369 个用例
 mvn test -Dtest=LegServiceTest    # 单个类
 ```
 
-**335 / 335 全绿**，25 个测试类 / 5497 行（另有 1 个测试替身 `FakeChatModel`）。分布（用例数）：
+**369 / 369 全绿**，26 个测试类 / 6071 行（另有 1 个测试替身 `FakeChatModel`）。分布（用例数）：
 
 | 测试类 | 数量 | 护住什么 |
 |---|---|---|
 | `retrieval/LegServiceTest` | 38 | 城际班次挑选（火车 + 机票）：去程/回程时段窗口、**最快的首班车不能胜出**、超限仍然给车、跨午夜不算合格、机票不发时长筛选且只留直达 |
+| `llm/ChatComposerTest` | 28 | 画像抽取与合并；persona：**过闸门才透传**（编造依据整条丢弃且 reply 不受影响）、prompt 里有维度表和已有判断 |
 | `plan/PersonaGuardTest` | 24 | persona 闸门：**编造的 evidence 逐字回查后进不去**、assistant 自己说的不算依据、自造 key 进不去、太短的依据不算、被丢的那条**不会连坐**后面那条、真话必须进得去 |
 | `plan/PlanAssemblerTest` | 23 | 装配：编号回填、缺字段、顺序 |
-| `llm/ChatComposerTest` | 20 | 画像抽取与合并 |
+| `plan/DayReasonsTest` | 21 | 每天的理由：**方向防线**（"体力很好"的原话绝不能被引用成"排得轻松"的理由）、缺坐标整句不说（宁可不解释也不解释错）、数字来自本地事实、上限 2 句、连住/首末日的车次时刻 |
 | `plan/PlanServiceHotelAlternativeTest` | 18 | 住宿备选：**排除主选**、**跨档轮转**、价格升序、null 排最后、只挑酒店不混景点、每天都挂且排除当天主选 |
 | `plan/TravelParamsMergeTest` | 14 | 多轮对话里画像的增量合并 |
 | `plan/PersonaMergeTest` | 14 | persona 合并：**同 key 覆盖、没提到的维度一律保留**、覆盖不挪位置、不可变 |
@@ -464,7 +477,7 @@ mvn test -Dtest=LegServiceTest    # 单个类
 | `plan/PlanServiceGeoConflictTest` | 11 | 距离兜底校验（双向：有冲突必有警告、无冲突必无警告） |
 | `plan/GeoTest` | 10 | 距离公式与边界（赤道 lat=0 不算缺值、缺坐标回 null 不是 0） |
 | `plan/PersonaTraitTest` | 10 | persona 维度闭集：只有 5 个、key 是小写英文、不重复画像已有的字段、认不出时**返回 null 而不是兜底** |
-| 其余 10 个类 | 93 | — |
+| 其余 10 个类 | 98 | — |
 
 **测试怎么写**：纯函数优先抽 `static`（`firstDayConflict` / `lastDayConflict` /
 `spotSpreadConflict` / `morningCommuteConflict` / `Geo.distanceKm` /
@@ -473,9 +486,12 @@ mvn test -Dtest=LegServiceTest    # 单个类
 
 **断言必须验证过它能红。** 跑一遍是绿的说明不了什么，要往代码里注入一个 bug、
 看着对应的用例失败、再改回来 —— 没验证过能红的断言只是"看起来在验证"。
-persona 这一轮做了三组注入（`PersonaGuard` 的逐字回查改成恒真 → **5 条红**；
+persona 这一轮（两段）共做了六组注入（`PersonaGuard` 的逐字回查改成恒真 → **5 条红**；
 `PersonaTrait.ofKey` 把不认识的 key 兜底成 `WALKING` → **6 条红**；
-把"同 key 去重"提到"依据检查"之前 → **2 条红**）。
+把"同 key 去重"提到"依据检查"之前 → **2 条红**；
+接链路段：`DayReasons` 的方向防线 `leansRelaxed` 恒真 → **2 条红**；
+缺坐标的段改"跳过"而不是"整句不说" → **1 条红**；
+`ChatComposer` 里把 `PersonaGuard.screen` 换成直通 → **2 条红**）。
 `duplicateKeyKeepsTheFirst` 第一版就是被这个流程抓出来的：它第二条用的 evidence
 是句假话，会先被"编造"那道关拦下 —— 那条测试永远测不到去重，是一条**假绿**。
 

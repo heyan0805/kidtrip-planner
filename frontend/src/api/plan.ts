@@ -1,6 +1,8 @@
 import { request } from './http'
 import type {
   HotelStay,
+  Persona,
+  PersonaInference,
   PlanChatData,
   PlanChatRequest,
   PlanGenerateRequest,
@@ -105,6 +107,21 @@ const MOCK_FIELDS: Array<{ key: keyof TravelParams; ask: string }> = [
 ]
 
 /**
+ * 假数据也推 persona —— 但只做**关键词 → 维度**这一件粗暴的事，
+ * 不假装理解语义（和 mockChat 抠参数是同一条规矩：模拟聪明的模型
+ * 会在开发时给出错误的预期）。
+ *
+ * evidence 直接用**用户那句原话**：它本来就是本轮真实发出的消息，逐字成立 ——
+ * 这一点上假数据没有说谎，前端卡片把它当"用户原话"展示是安全的。
+ */
+const MOCK_PERSONA_RULES: Array<{ key: PersonaInference['key']; value: string; hit: RegExp }> = [
+  { key: 'walking', value: '少走路', hit: /放松|轻松|不想折腾|怕累|少走/ },
+  { key: 'rest', value: '要午睡', hit: /午睡|午觉/ },
+  { key: 'crowd', value: '避开人多', hit: /人多|排队|人挤/ },
+  { key: 'budget', value: '想省着花', hit: /省钱|预算|便宜|划算/ },
+]
+
+/**
  * 抠出来的词后面常跟着动词/助词/标点（"珠海玩"、"广州出发"、"珠海，"），统一削掉。
  *
  * ⚠️ 这**仍然是抠关键词，不是理解语义** —— 只是让抠出来的东西"看起来像个地名"。
@@ -197,7 +214,20 @@ async function mockChat(req: PlanChatRequest): Promise<PlanChatData> {
     ? `（假数据）我记下了。${missing[0].ask}`
     : '（假数据）信息已经齐了，点「生成行程」就可以了。'
 
-  return { reply, params: patch }
+  // ── persona：关键词命中就推一条，合并规则照抄后端 ──────────────────
+  // "同 key 覆盖（这轮命中了就换新值）、没提到的保留" —— 上一轮推过的、
+  // 这轮没再说的维度照样留着。前端不替后端做减法。
+  const hitRules = MOCK_PERSONA_RULES.filter((r) => r.hit.test(text))
+  const kept = (req.currentPersona ?? { inferences: [] }).inferences
+    .filter((it) => !hitRules.some((r) => r.key === it.key))
+  const persona: Persona = {
+    inferences: [
+      ...kept,
+      ...hitRules.map((r) => ({ key: r.key, value: r.value, evidence: text })),
+    ],
+  }
+
+  return { reply, params: patch, persona }
 }
 
 /**
@@ -405,6 +435,16 @@ async function mockPlan(req: PlanGenerateRequest): Promise<TravelPlan> {
       // 假数据要是只填第一天，"前端有没有真的按连住去重"这件事就验不出来了 ——
       // 而那恰恰是这一层最容易写错的地方（漏掉 first 判断 → 同一份清单在屏幕上出现三遍）。
       hotelAlternatives: mockHotelAlternatives(),
+      // 每天那句"为什么这么排"（假数据版）。**数字全部取自这套 mock 自己的事实**：
+      // 去程 09:29 到站 → 第一个点 10:30 才开始；酒店 tips 写着"连住不用收拾行李"。
+      // 一句和自己的行程对不上的理由，比没有理由更糟（理由是拿来核对信任的，不是装饰）。
+      // 最后一天刻意是 null —— "没有可说的就不渲染"这条分支也得在降级路上被走到。
+      why:
+        i === 0
+          ? '（假数据）示例理由：上午 09:29 才到站，第一个点从 10:30 开始，留了出站进城的缓冲'
+          : i === days - 1
+            ? null
+            : '（假数据）示例理由：连住同一家酒店，不用收拾行李',
     })),
     warnings: ['这是本地假数据（VITE_USE_MOCK 生效），不是后端返回的真实行程'],
     // 备选池里前 days 条**就是日程里的那几条**（同 id）—— 这不是冗余，是契约规定的：

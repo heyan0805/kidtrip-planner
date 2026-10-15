@@ -52,7 +52,7 @@ class PlanServiceHotelAlternativeTest {
 
     private static TravelDay dayWithHotel(int day, String hotelId) {
         return new TravelDay(day, "主题", List.of(), null, List.of(),
-                hotelId == null ? null : stay(hotelId, 388.0), List.of());
+                hotelId == null ? null : stay(hotelId, 388.0), List.of(), null);
     }
 
     /* ============================================================
@@ -305,7 +305,7 @@ class PlanServiceHotelAlternativeTest {
                 "动车D947", "二等座", true, null, "https://x");
         var spot = new TravelSpot("09:30", "长隆", "提示", "p1", 300.0, "https://b", "", 22.0, 113.0);
         var original = new TravelDay(1, "抵达日", List.of(spot), transfer, List.of(),
-                stay("主选", 388.0), List.of());
+                stay("主选", 388.0), List.of(), null);
 
         var out = PlanService.attachHotelAlternatives(List.of(original), List.of(stay("A", 100.0))).get(0);
 

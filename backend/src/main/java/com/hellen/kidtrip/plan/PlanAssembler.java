@@ -174,9 +174,12 @@ public final class PlanAssembler {
             // hotelAlternatives 同样给空 list（不是 null）：它由编排层在排完之后统一补上
             // （见 PlanService.attachHotelAlternatives），理由和 transfer 一样 ——
             // 它需要的是**完整候选池**，而在这一步池子已经被截到 prompt 上限了。
+            // why 给 null（不是空串）：它是编排层**最后**一步算出来的（见 DayReasons），
+            // 这一步还不该有理由 —— 而"没有理由"在契约里就是 null（见 TravelDay 注释 ③）。
+            // 给 "" 会多出一种"没有"的写法，前端就得同时防两种情况。
             days.add(new TravelDay(i + 1, theme, spots, null, List.of(),
                     stay.hotel() == null ? null : toStay(stay.hotel(), stay.tips()),
-                    List.of()));
+                    List.of(), null));
         }
 
         // ── 本地补排：模型留了空天，而池子里还有没用上的候选 ──────────────────
@@ -213,7 +216,7 @@ public final class PlanAssembler {
                     // 顺手把住宿也清掉会凭空抹掉模型排好的连住。
                     // 交通那栏同理带上：它跟"白天去哪"更没关系。
                     days.set(i, new TravelDay(d.day(), FILLED_THEME, filled, d.transfer(),
-                            d.alternatives(), d.hotel(), d.hotelAlternatives()));
+                            d.alternatives(), d.hotel(), d.hotelAlternatives(), d.why()));
                 }
             }
         }

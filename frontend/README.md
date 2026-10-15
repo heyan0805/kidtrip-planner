@@ -165,20 +165,20 @@ frontend/
    ├─ index.css         2 行  三行 @tailwind 指令
    ├─ types/
    │  ├─ flyai.ts     131 行  飞猪接口的原始形状（第三方形状）
-   │  └─ plan.ts      559 行  我们自己的契约（前后端逐字一致）
+   │  └─ plan.ts      627 行  我们自己的契约（前后端逐字一致）
    ├─ api/
    │  ├─ http.ts      249 行  唯一 HTTP 出口（协议 / 超时 / 错误分类 / Mock 降级）
-   │  └─ plan.ts      431 行  两个业务接口 + 进度轮询 + 各自的假数据
+   │  └─ plan.ts      471 行  两个业务接口 + 进度轮询 + 各自的假数据
    ├─ hooks/
-   │  └─ usePlanChat.ts 539 行  对话状态机（前端**全部**业务状态在这）
+   │  └─ usePlanChat.ts 580 行  对话状态机（前端**全部**业务状态在这）
    └─ pages/
-      └─ TravelPlanner/index.tsx  1104 行  唯一页面 + 9 个局部组件 + 10 个纯函数
+      └─ TravelPlanner/index.tsx  1171 行  唯一页面 + 10 个局部组件 + 10 个纯函数
 ```
 
-9 个源文件、3032 行。三条一句话规矩：
+9 个源文件、3248 行。三条一句话规矩：
 
 - **`types/` 分两个文件**：`flyai.ts` 因飞猪变，`plan.ts` 因我们变 —— 分开之后飞猪改字段只弄坏一个文件。
-- **没有 `components/` 目录**：9 个子组件都是唯一页面的局部函数，换个页面就没意义。**出现第二个页面再搬。**
+- **没有 `components/` 目录**：10 个子组件都是唯一页面的局部函数，换个页面就没意义。**出现第二个页面再搬。**
 - **没有 `fetch` 在组件里**：全 `src/` 只有一处 `fetch`（`api/http.ts:197`），其余全部走 `request<T>()`。
 
 ---
@@ -245,7 +245,7 @@ APP_URL=http://127.0.0.1:5173/ node verify-l1-ui.mjs
 |---|---|---|
 | 1 | **0 个单元测试** | 改了 `usePlanChat` 里的三个机制（镜像 ref / 并发闸门 / 稀疏覆盖），没有任何自动化能拦住回归 |
 | 2 | `index.html` 的 `<title>` 还是 `frontend` | 浏览器标签页显示"frontend" |
-| 3 | `pages/TravelPlanner/index.tsx` **单文件 1104 行** | 已经**越过了**该拆的线；`DayCard` / `SpotRow` / `TransferLine` / `AlternativeLine` / `HotelAlternativeLine` 是最先该拆出去的几个 |
+| 3 | `pages/TravelPlanner/index.tsx` **单文件 1171 行** | 已经**越过了**该拆的线；`DayCard` / `SpotRow` / `TransferLine` / `AlternativeLine` / `HotelAlternativeLine` / `PersonaCard` 是最先该拆出去的几个 |
 | 4 | 没有路径别名（没有 `@/`） | 全是相对路径（`'../../hooks/usePlanChat'`）。现在只有 3 层，不值得为它改两处配置 |
 | 5 | `types/plan.ts` 里 `PlanRules` / `DEFAULT_PLAN_RULES` 前端从不读取 | 后端已经真正在用 `maxDistanceKm` 了，**前端这份是过期的，改规则别信它**，以 `../_probe/prerun.mjs` 打出的真实 JSON 为准 |
 | 6 | ~~`/generate` 期间只有一句「正在生成（要几十秒）」~~ | **已解决**：按钮下方展开真实的分步流水线（见第 3 节）。做法是 `GET /api/plan/progress/{runId}` + 每秒轮询。**剩下的缺口是"步里面"仍不可见** —— 检索那几秒里查了几轮、是宽查还是补查，还没报出来 |

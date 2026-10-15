@@ -39,7 +39,7 @@ class PlanServiceLegConflictTest {
     }
 
     private static TravelDay day(TravelSpot... spots) {
-        return new TravelDay(1, "当天主题", List.of(spots), null, List.of(), null, List.of());
+        return new TravelDay(1, "当天主题", List.of(spots), null, List.of(), null, List.of(), null);
     }
 
     /** 实测：深圳→广州 11-17，10:10 发、10:39 到广州南（29 分钟） */

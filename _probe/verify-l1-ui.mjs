@@ -22,6 +22,7 @@ import { PROBE_WORKSPACE } from './_paths.mjs'
  */
 
 import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
 
 // ESM 的 import 不认 NODE_PATH，用 createRequire 从隔离目录解析（见 verify-b5-ui.mjs）
 const WORKSPACE = PROBE_WORKSPACE
@@ -112,6 +113,28 @@ try {
     '⭐ 一轮结束后光标自动回到输入框（不然每轮都得先点一下）',
     `当前焦点：${active}`)
 
+  /* ── persona：一句带偏好的话，推论要穿整条链路亮出来（2026-10-15 加）──
+   * 这里和 verify-mock-ui 那组 persona 断言的本质区别：那条路走的是前端假数据，
+   * 这条路走的是**真后端** —— 假模型输出的 persona 要过真的 PersonaGuard（逐字回查
+   * 真对话历史）、真的合并、真的契约字段，才轮到前端画。任何一环静默丢字段，
+   * 这里都会红。 */
+  console.log('\n【1b】persona：一句带偏好的话')
+  const beforePersona = await page.innerText('body')
+  check(!beforePersona.includes('我这样理解你'),
+    '⭐ 还没聊到偏好时这张卡不存在（空 = 安静，不是挂着一张"我还不懂你"）')
+  await send('这次想安排得轻松一点，别去人太多的网红点排队')
+  const asideText = await page.innerText('aside')
+  check(asideText.includes('我这样理解你'),
+    '⭐ 卡片出现 —— 链路：假模型输出 persona → 真闸门逐字回查 → 合并 → 契约 → 前端')
+  check(asideText.includes('怕走路') && asideText.includes('少走路'),
+    '⭐ 第一条推论画出来了（怕走路 · 少走路）',
+    asideText.slice(asideText.indexOf('我这样理解你'), asideText.indexOf('我这样理解你') + 200))
+  check(asideText.includes('怕人多') && asideText.includes('避开人多'),
+    '⭐ 一句话推出来的两条都在（怕人多 · 避开人多）')
+  check(asideText.includes('你说过') && asideText.includes('轻松一点'),
+    '⭐ 依据挂的是用户原话（它过了 PersonaGuard 的逐字回查才到这，不是模型转述）')
+  await page.screenshot({ path: `${SHOTS}l1-ui-1b-persona.png`, fullPage: true })
+
   /* ── 生成 ───────────────────────────────────────────────────── */
   console.log('\n【2】点「生成行程」，等 20~90 秒')
   const t0 = Date.now()
@@ -200,6 +223,37 @@ try {
       `⭐ 回程方向是反的（${IN_STATION} → ${OUT_STATION}），不是把去程又画了一遍`,
       `收到的顺序：${last.text.match(/..站|珠海|广州南/g)?.join(' · ')}`)
   }
+
+  /* ── 每天的「为什么这么排」（2026-10-15 加）──────────────────────
+   * 理由不是模型写的，是 DayReasons 从本地事实拼的 —— 所以这里断言的是
+   * **具体的事实句**：第 1 天必须提到"到站"（去程 09:29 → 第一个点 10:00），
+   * 最后一天必须提到"发车"。模型写不出这两句（它不知道车次时刻），
+   * 一句模板句冒充理由在这里混不过去。 */
+  console.log('\n【3】每天的 why（理由由本地事实拼装）')
+  check(!!day1?.text.includes('💡') && day1.text.includes('到站'),
+    '⭐ 第 1 天的理由说的是到站时刻（车次是真实查的，模型写不出这个数字）',
+    day1?.text.slice(0, 160))
+  check(!!last?.text.includes('💡') && last.text.includes('发车'),
+    '⭐ 最后一天的理由说的是回程发车（另一头的时间事实）',
+    last?.text.slice(0, 160))
+  check(cards.filter((c) => c.text.includes('💡')).length === cards.length,
+    `每一天都有理由行（草稿 2 个点/天 < 常规 3 个 → "留了余量"天天成立）`,
+    `${cards.filter((c) => c.text.includes('💡')).length}/${cards.length} 天有 💡`)
+
+  /* ── persona 进了排程 prompt 吗（fake-llm 落盘对照）────────────
+   * 上面那张卡只证明 persona 到了**前端**；这一组证明它进了**排程 prompt** ——
+   * 中间隔着：前端把它塞回 PlanGenerateRequest → 后端透传 → PlanComposer 渲染。
+   * 链路上任何一处静默丢字段（字段名抄错、忘记传参），界面都不会有任何异常，
+   * 只有读假模型收到的那份 prompt 才能抓到。 */
+  console.log('\n【4】persona 真的进了排程 prompt 吗')
+  const seen = JSON.parse(
+    readFileSync(new URL('./out/fake-llm-last-draft.json', import.meta.url), 'utf8'))
+  check(seen.prompt.includes('我对这个用户的判断'),
+    '⭐ 排程 prompt 里有【我对这个用户的判断】这一段（前端带回来 → 契约 → 后端渲染）')
+  check(seen.prompt.includes('少走路') && seen.prompt.includes('轻松一点'),
+    '⭐ 段里有判断和用户原话（模型拿到的是带依据的取舍依据，不是光秃秃的标签）',
+    seen.prompt.slice(seen.prompt.indexOf('我对这个用户的判断'),
+      seen.prompt.indexOf('我对这个用户的判断') + 260))
 
   /* ── 溯源里能不能看见车次查询 ───────────────────────────────── */
   // ⚠️ 必须**先展开** <details>。

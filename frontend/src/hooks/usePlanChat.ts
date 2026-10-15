@@ -3,6 +3,7 @@ import { chatPlan, fetchPlanProgress, generatePlan } from '../api/plan'
 import { ApiError, subscribeMockNotice } from '../api/http'
 import type {
   Message,
+  Persona,
   PlanProgress,
   SpotOption,
   TravelDay,
@@ -14,12 +15,16 @@ import type {
 /**
  * 对话的状态机 —— "上下文传递"的前端一侧全部在这里。
  *
- * ── 它要维护两份状态，而且必须是两份 ─────────────────────────────
+ * ── 它要维护三份状态，而且各自独立 ───────────────────────────────
  *   messages —— 对话历史（给人看的，越攒越长）
- *   params   —— 已提取的画像（给机器用的，只有 7 个字段）
- * 为什么不合成一份：历史的长度不应该影响已提取的事实。用户聊了 20 轮之后，
- * "想去珠海"那句话可能已经被裁掉了，但 `params.city` 依然是"珠海"。
- * **把事实从历史里提炼出来单独存，是让长对话不退化的关键一步。**
+ *   params   —— 已提取的画像（给机器用的，他**说过的**事实）
+ *   persona  —— 我们推的偏好（他没直说、但从话里推出来的，每条带他的原话）
+ *
+ * params 和 persona 为什么分开存：它们错了之后的**下场完全不同**。
+ *   事实错了用户会说"我说的是 4 天"（自愈）；推论错了他以为你懂他，**全程不报错**。
+ *   所以后端给它们两套合并规则（事实"没答保留" / 推论"同 key 覆盖"），
+ *   前端这里也只是各存各的、各传各的 —— 不做任何合并，谁做的合并谁负责那份状态。
+ *   **把事实从历史里提炼出来单独存，是让长对话不退化的关键一步**（persona 同理）。
  *
  * ── 这个 hook 里有三个坑，每一个都写在代码旁边了 ─────────────────
  *   ① 过期闭包 —— 异步流程里用 state 会读到旧值
@@ -35,6 +40,13 @@ export interface ChatBubble extends Message {
 export interface UsePlanChat {
   messages: ChatBubble[]
   params: TravelParams
+  /**
+   * 我们对这个用户的理解（2026-10-15 加）。给「我这样理解你」卡片用。
+   *
+   * 和 params 的分工见 hook 顶上的注释。**永远非 null**（没推出来就是空数组）；
+   * 旧后端不发这个字段时 chatPlan 那边会兜成空，这里不判。
+   */
+  persona: Persona
   plan: TravelPlan | null
   sending: boolean
   generating: boolean
@@ -77,6 +89,12 @@ function bubble(role: Message['role'], content: string): ChatBubble {
   bubbleSeq += 1
   return { id: `m${bubbleSeq}`, role, content }
 }
+
+/**
+ * 空的 persona。state / ref 的初值和 reset 三处都用它 ——
+ * 各写一个字面量的话，将来改形状（比如加字段）要改三处，漏一处就是"重置不彻底"。
+ */
+const EMPTY_PERSONA: Persona = { inferences: [] }
 
 /**
  * 生成行程的**必填项**。
@@ -242,6 +260,7 @@ function toSwappedSpot(base: TravelSpot, swap: SpotOption): TravelSpot {
 export function usePlanChat(): UsePlanChat {
   const [messages, setMessages] = useState<ChatBubble[]>([])
   const [params, setParams] = useState<TravelParams>({})
+  const [persona, setPersona] = useState<Persona>(EMPTY_PERSONA)
   const [plan, setPlan] = useState<TravelPlan | null>(null)
   const [sending, setSending] = useState(false)
   const [generating, setGenerating] = useState(false)
@@ -266,6 +285,7 @@ export function usePlanChat(): UsePlanChat {
    */
   const messagesRef = useRef<ChatBubble[]>([])
   const paramsRef = useRef<TravelParams>({})
+  const personaRef = useRef<Persona>(EMPTY_PERSONA)
 
   /* ── 坑 ②：并发闸门 ────────────────────────────────────────────
    * 一个共享的"有没有请求在飞"标志。
@@ -338,6 +358,11 @@ export function usePlanChat(): UsePlanChat {
     setParams(next)
   }, [])
 
+  const commitPersona = useCallback((next: Persona) => {
+    personaRef.current = next
+    setPersona(next)
+  }, [])
+
   /* ── 生成进度：一边飞 /generate，一边每秒问一句"到哪了" ─────────────
    * 为什么是轮询、而不是让 /generate 流式返回？理由在后端 PlanController 顶上写着，
    * 一句话：这条产品要跑在内网穿透上，而 Cloudflare 免费隧道不支持 SSE。
@@ -392,14 +417,22 @@ export function usePlanChat(): UsePlanChat {
 
       try {
         // ⭐ 这里读的是 **ref**，不是 state —— 就是坑 ① 的解法
+        // currentPersona 和 currentParams 是同一个道理：上一轮的 persona 原样带回去，
+        // 合并在后端做（同 key 覆盖），前端不替它做减法。
         const data = await chatPlan(
-          { messages: toWire(messagesRef.current), currentParams: paramsRef.current },
+          {
+            messages: toWire(messagesRef.current),
+            currentParams: paramsRef.current,
+            currentPersona: personaRef.current,
+          },
           controller.signal,
         )
         // 读最新的 ref 再追加，而不是用上面的快照：
         // 万一将来闸门被放开、允许并发，这一行也能保证不覆盖别的消息。
         commitMessages([...messagesRef.current, bubble('assistant', data.reply)])
         commitParams(data.params)
+        // 旧后端没有这个字段（?? 兜空）—— 降级路上卡片就是一直空的，不会崩。
+        commitPersona(data.persona ?? EMPTY_PERSONA)
       } catch (e) {
         if (e instanceof ApiError && e.kind === 'aborted') return
         setError(messageOf(e))
@@ -409,7 +442,7 @@ export function usePlanChat(): UsePlanChat {
         setSending(false)
       }
     },
-    [commitMessages, commitParams],
+    [commitMessages, commitParams, commitPersona],
   )
 
   const generate = useCallback(async () => {
@@ -434,10 +467,16 @@ export function usePlanChat(): UsePlanChat {
     startPolling(runId, controller.signal)
 
     try {
-      // 只传 params：**不要自己拼 retrieval**。
+      // 只传 params 和 persona：**不要自己拼 retrieval**。
       // 检索条件该由后端按画像规划（那是它的正常产出方式），
       // 前端这里传一份自己猜的，反而会把那次规划顶掉。
-      const result = await generatePlan({ params: paramsRef.current }, controller.signal, runId)
+      // persona 原样递进去 —— 编排层拿它做"取舍参考"（当天排几个点、怎么挑），
+      // 但硬规则（180 分钟上限、距离红线）它动不了，那是后端的底线。
+      const result = await generatePlan(
+        { params: paramsRef.current, persona: personaRef.current },
+        controller.signal,
+        runId,
+      )
       setPlan(result)
     } catch (e) {
       if (e instanceof ApiError && e.kind === 'aborted') return
@@ -484,13 +523,14 @@ export function usePlanChat(): UsePlanChat {
     inFlight.current = false
     commitMessages([])
     commitParams({})
+    commitPersona(EMPTY_PERSONA)
     setPlan(null)
     setSwaps({})
     setProgress(null)
     setError(null)
     setSending(false)
     setGenerating(false)
-  }, [commitMessages, commitParams, stopPolling])
+  }, [commitMessages, commitParams, commitPersona, stopPolling])
 
   /**
    * 还差哪几项必填。
@@ -508,6 +548,7 @@ export function usePlanChat(): UsePlanChat {
   return {
     messages,
     params,
+    persona,
     plan,
     sending,
     generating,

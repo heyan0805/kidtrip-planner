@@ -2,6 +2,7 @@ package com.hellen.kidtrip.llm;
 
 import com.hellen.kidtrip.candidate.PoiCandidate;
 import com.hellen.kidtrip.plan.Legs;
+import com.hellen.kidtrip.plan.Persona;
 import com.hellen.kidtrip.plan.TravelParams;
 import com.hellen.kidtrip.retrieval.Transfer;
 import com.hellen.kidtrip.retrieval.TransportMode;
@@ -132,7 +133,7 @@ class PlanComposerTest {
     @DisplayName("⭐ 车次真的进了模型看到的 prompt（写对了 ≠ 被调用了）")
     void legsActuallyReachTheModelPrompt() {
         FakeChatModel model = new FakeChatModel(OK_JSON);
-        new PlanComposer(model, MAPPER).draft(params(), List.of(poi("C1")), List.of(),
+        new PlanComposer(model, MAPPER).draft(params(), Persona.empty(), List.of(poi("C1")), List.of(),
                 PlanRules.DEFAULT, realLegs());
 
         String prompt = model.firstPrompt();
@@ -150,11 +151,66 @@ class PlanComposerTest {
     void draftWorksWithoutAnyLegs() {
         FakeChatModel model = new FakeChatModel(OK_JSON);
 
-        PlanDraft draft = new PlanComposer(model, MAPPER).draft(params(), List.of(poi("C1")),
-                List.of(), PlanRules.DEFAULT, Legs.empty());
+        PlanDraft draft = new PlanComposer(model, MAPPER).draft(params(), Persona.empty(),
+                List.of(poi("C1")), List.of(), PlanRules.DEFAULT, Legs.empty());
 
         assertEquals(1, draft.days().size(), "没车次照样要排得出行程");
         assertTrue(model.firstPrompt().contains("没有查到往返车次"),
                 "但必须让模型知道'这次没有车次'，否则它会在 tips 里编一句时刻");
+    }
+
+    /* ============================================================
+     * persona 也要真的被送到 —— 和车次是同一类"接错线"的错
+     * ============================================================ */
+
+    private static Persona personaWith(String key, String value, String evidence) {
+        return Persona.of(List.of(new Persona.Inference(key, value, evidence)));
+    }
+
+    @Test
+    @DisplayName("⭐ 「我对这个用户的判断」必须真的进 prompt，而且带着他的原话")
+    void personaActuallyReachesTheModelPrompt() {
+        FakeChatModel model = new FakeChatModel(OK_JSON);
+        Persona persona = personaWith("walking", "少走路", "我想安排得放松一点");
+
+        new PlanComposer(model, MAPPER).draft(params(), persona, List.of(poi("C1")), List.of(),
+                PlanRules.DEFAULT, Legs.empty());
+
+        String prompt = model.firstPrompt();
+        assertNotNull(prompt);
+        assertTrue(prompt.contains("【我对这个用户的判断】"),
+                "那一段必须真的被插进模板里（曾经漏过 %s 占位符这种事）");
+        assertTrue(prompt.contains("怕走路：少走路"), "结论要进：" + prompt);
+        assertTrue(prompt.contains("我想安排得放松一点"),
+                "**依据也必须进** —— 只给结论，模型会把它当用户明确声明的需求执行：" + prompt);
+    }
+
+    @Test
+    @DisplayName("⭐ 空 persona 也要在那一段里写明'还没有'，不能留白（留白会被读成漏拼）")
+    void emptyPersonaSaysSoExplicitly() {
+        FakeChatModel model = new FakeChatModel(OK_JSON);
+
+        new PlanComposer(model, MAPPER).draft(params(), Persona.empty(), List.of(poi("C1")),
+                List.of(), PlanRules.DEFAULT, Legs.empty());
+
+        String prompt = model.firstPrompt();
+        assertTrue(prompt.contains("【我对这个用户的判断】"), prompt);
+        assertTrue(prompt.contains("还没有从他的对话里看出"), prompt);
+    }
+
+    @Test
+    @DisplayName("⭐ 必须明令禁止模型自己写理由/编数字 —— 理由由后端算（DayReasons）")
+    void modelIsToldNotToWriteItsOwnReasons() {
+        FakeChatModel model = new FakeChatModel(OK_JSON);
+        Persona persona = personaWith("walking", "少走路", "我想安排得放松一点");
+
+        new PlanComposer(model, MAPPER).draft(params(), persona, List.of(poi("C1")), List.of(),
+                PlanRules.DEFAULT, Legs.empty());
+
+        String prompt = model.firstPrompt();
+        assertTrue(prompt.contains("不要写任何我们没给过的数字"),
+                "理由里的数字必须可核实，模型写的公里数我们一个字都验不了：" + prompt);
+        assertTrue(prompt.contains("理由由系统自己算"),
+                "要说清'理由不归你写'，否则它会顺手替我们解释：" + prompt);
     }
 }

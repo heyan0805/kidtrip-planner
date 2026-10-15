@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { REQUIRED_FIELDS, applySwaps, swapKey, usePlanChat } from '../../hooks/usePlanChat'
 import type { SpotEdits } from '../../hooks/usePlanChat'
+import { PERSONA_LABELS } from '../../types/plan'
 import type {
   HotelStay,
+  Persona,
   PlanProgress,
   PlanProgressStep,
   SpotOption,
@@ -19,11 +21,13 @@ import type {
  * 它刻意做得很朴素：这一轮要验证的是**上下文传递**（历史 + 画像能不能一轮轮攒起来），
  * 不是视觉。所以每个元素都对应一个真实的状态，没有装饰。
  *
- * 信息结构就是 usePlanChat 里那两份状态的投影：
+ * 信息结构就是 usePlanChat 里状态的投影：
  *   左边（中间那块）—— messages：正在发生什么
- *   右边（画像卡）  —— params：目前为止攒出了什么
- * 这两个东西并排显示，是为了让"上下文"这件事**看得见**：
- * 你能看到自己聊了 5 轮之后，画像里哪些格子被填上了、哪些还是"待确认"。
+ *   右边（画像卡）  —— params：他**说过的**事实
+ *   右边（理解卡）  —— persona：我们**推**的偏好（每条挂他的原话）
+ * 这几样并排显示，是为了让"上下文"这件事**看得见**：
+ * 你能看到自己聊了 5 轮之后，画像里哪些格子被填上了、哪些还是"待确认"，
+ * 也能看到系统从你的话里**推**出了什么 —— 推错了当场就能用话纠正。
  */
 export default function TravelPlanner() {
   const chat = usePlanChat()
@@ -154,9 +158,14 @@ export default function TravelPlanner() {
             </div>
           </section>
 
-          {/* ── 右：画像卡 ────────────────────────────────── */}
+          {/* ── 右：画像卡 + 理解卡 ──────────────────────── */}
           <aside className="space-y-4">
             <ProfileCard params={chat.params} missing={chat.missingFields} />
+
+            {/* persona 卡放在画像卡正下面：两张卡并排回答同一个问题的两半 ——
+                "他说过的"（事实）和"我们推的"（偏好）。位置挨着，用户才看得出
+                哪些格子是他说的、哪些是我们添的 —— 这个边界必须看得见。 */}
+            <PersonaCard persona={chat.persona} />
 
             <button
               type="button"
@@ -296,6 +305,58 @@ function renderField(key: keyof TravelParams, p: TravelParams): string {
   if (key === 'days') return `${v} 天`
   if (key === 'childAge') return `${v} 岁`
   return String(v)
+}
+
+/* ============================================================
+ * 我这样理解你 —— persona 卡（2026-10-15 加）
+ * ============================================================ */
+
+/**
+ * 我们推出来的偏好，每条挂着他自己的原话。
+ *
+ * ── 它和上面那张画像卡的分界线（这条是这个设计的核心）──────
+ *   画像卡 —— 他**说过的**事实（"9 天""想去珠海"）。错了他会纠正："我说的是 4 天"。
+ *   这张卡 —— 我们**推**的偏好（"怕走路""要午睡"）。错了他**以为你懂他，全程不报错**。
+ *   所以每条必须亮出依据（他的原话）：让"我怎么理解你"从后台搬到台前，
+ *   看得见、可核对。原话是后端**逐字验证过**才放进来的（PersonaGuard），
+ *   前端可以放心把它当"用户原话"引用，不需要再验一遍。
+ *
+ * ── 为什么没有"删除"按钮 ───────────────────────────────────
+ *   推错了的纠正路径是**用话纠正**：他说"其实我们体力很好"，下一轮模型
+ *   就会推成相反方向的判断、把旧的覆盖掉（探针 S5 实测过）。
+ *   一个 ✗ 按钮看着更直接，但它改不了根：对话历史里那句原话还在，
+ *   下一轮模型还会从它再推出同一条 —— 按钮删掉的状态活不过一轮。
+ *   硬要做成"删了就不再出"得给"作废"一个显式的协议词，那不是这一轮的事。
+ *
+ * ── 空的时候不渲染 ─────────────────────────────────────────
+ *   没推出来任何判断时渲染一张空卡，等于天天挂着"我还不懂你"——
+ *   那是噪声不是提示。空 = 安静，等第一条推论出来它自然出现。
+ */
+function PersonaCard({ persona }: { persona: Persona }) {
+  if (persona.inferences.length === 0) return null
+  return (
+    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
+      <h2 className="text-sm font-medium text-amber-900">我这样理解你</h2>
+      <p className="mt-1 text-xs text-amber-700">从你的话里推出来的，每条都附你自己的原话</p>
+      <ul className="mt-3 space-y-2.5">
+        {persona.inferences.map((it) => (
+          <li key={it.key} className="text-sm">
+            <span className="text-amber-800">{PERSONA_LABELS[it.key]}</span>
+            <span className="mx-1.5 text-amber-400">·</span>
+            <span className="font-medium text-gray-900">{it.value}</span>
+            {it.evidence && (
+              <p className="mt-1 border-l-2 border-amber-300 pl-2 text-xs text-gray-500">
+                你说过：「{it.evidence}」
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 text-[11px] leading-snug text-amber-700/80">
+        推错了就直接说（比如「其实我们体力很好」），下一轮会更新。
+      </p>
+    </div>
+  )
 }
 
 /* ============================================================
@@ -559,6 +620,12 @@ function DayCard({
       <h3 className="text-sm font-medium text-gray-900">
         第 {day.day} 天 · {day.theme}
       </h3>
+
+      {/* 为什么这么排（2026-10-15 加）。一句话模板拼的话：里面的数字（今天几个点
+          相隔多远、中午留了多长、几点到站）全部来自后端本地算出的事实 ——
+          不交给模型写，因为模型会写出"这里不用走很多路"这种**没法核对**的句子。
+          后端"没有可说的"就给 null，这里就不渲染：宁可不解释，也不硬凑一句。 */}
+      {day.why && <p className="mt-1 text-xs leading-relaxed text-gray-500">💡 {day.why}</p>}
 
       <ul className="mt-3 space-y-2">
         {day.spots.map((s, i) => (

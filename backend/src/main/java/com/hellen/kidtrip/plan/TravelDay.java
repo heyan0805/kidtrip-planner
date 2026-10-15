@@ -58,14 +58,30 @@ import java.util.List;
  *      这是刻意不去的重：去掉就得在这里引入"哪几天是同一段连住"的知识，
  *      而那是前端 mergeStays 已经在算的事（它一行比较 hotelId 就有了）。
  *      契约层多一个"能算出来的"字段，就多一个能对不上的地方。
+ *
+ * ── `why`：这一天**为什么是这个形状**（2026-10-15 加）────────────────────
+ *   一句话，**由后端用本地算得出的事实拼装**，不是模型写的。
+ *   理由写在 {@link DayReasons} 的类注释里，这里只说清它在契约上的三件事：
+ *
+ *   ① **可以是 null**，含义是"这一天没有值得解释的形状"（比如只有一个点、没有车次、
+ *      也没连住）。前端遇到 null 就**什么都不渲染** —— 不要替它编一句"这样安排更轻松"，
+ *      那种句子对任何一天都成立，等于一句废话。
+ *   ② 它和 `theme` 的分工：theme 是"今天玩什么"（模型写的，会进 prompt），
+ *      why 是"为什么这么排"（我们算的，**不进 prompt**）—— 一进一出的方向正好相反，
+ *      所以别把两者合并成一句。
+ *   ③ 空白会被归一成 null（紧凑构造器里那一行）：理由是"**一个字段只有一种表示'没有'的方式**"。
+ *      留着 `""` 的话，前端就得同时防 null 和空串，而漏掉后者的症状是**凭空多出一个空段落**
+ *      （`{day.why && …}` 在 JS 里对 `""` 是假值，看着没事；但别处只要有人写成
+ *      `day.why !== null && …`，那一行就会渲染成一个只有边框没有内容的空气泡）。
  */
 public record TravelDay(int day, String theme, List<TravelSpot> spots, Transfer transfer,
                         List<Transfer> alternatives, HotelStay hotel,
-                        List<HotelStay> hotelAlternatives) {
+                        List<HotelStay> hotelAlternatives, String why) {
 
     public TravelDay {
         spots = spots == null ? List.of() : List.copyOf(spots);
         alternatives = alternatives == null ? List.of() : List.copyOf(alternatives);
         hotelAlternatives = hotelAlternatives == null ? List.of() : List.copyOf(hotelAlternatives);
+        why = why == null || why.isBlank() ? null : why.strip();
     }
 }

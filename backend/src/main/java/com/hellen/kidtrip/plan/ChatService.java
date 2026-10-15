@@ -79,7 +79,12 @@ public class ChatService {
                     messages.size(), MAX_HISTORY_MESSAGES, messages.size() - trimmed.size());
         }
 
-        return composer.chat(trimmed, request.currentOrEmpty());
+        // ⚠️ 传下去的 trimmed 是**截断后**的历史，而 persona 的依据要在这份历史里逐字回查
+        //    （见 ChatComposer 里 screen 那一段）。这不是疏忽：我们只认模型**看得见**的东西 ——
+        //    它没看到某句话却拿那句话当依据，本来就更可疑。
+        //    代价是聊得特别久之后，早期原话会被挤出窗口、依据查不中而丢那一轮的新推论；
+        //    已经合并进 currentPersona 的旧条目不受影响（增量合并只覆盖本轮出现的 key）。
+        return composer.chat(trimmed, request.currentOrEmpty(), request.currentPersonaOrEmpty());
     }
 
     /** 从最早的开始丢，并逐条限长 */

@@ -5,6 +5,7 @@ import com.hellen.kidtrip.candidate.PoiCandidate;
 import com.hellen.kidtrip.common.JsonText;
 import com.hellen.kidtrip.plan.CandidateCodes;
 import com.hellen.kidtrip.plan.Legs;
+import com.hellen.kidtrip.plan.Persona;
 import com.hellen.kidtrip.plan.TravelParams;
 import com.hellen.kidtrip.retrieval.Transfer;
 import com.hellen.kidtrip.retrieval.TransportMode;
@@ -61,6 +62,10 @@ public class PlanComposer {
      *
      * @param pois   候选景点（**已经过规则校验、已经被编排层截过条数**）。
      *               编号 C1..Cn 由这个列表的顺序决定 —— 和 PlanAssembler 用的是同一套（CandidateCodes）。
+     * @param persona **我们对这个用户的判断**（`/chat` 那一步产出、原样带过来的），每条带他的原话。
+     *                **可以是空的**（没做过对话、或一句偏好都没推出来）——
+     *                那时的效果只是"这份行程没有在为你做取舍"，行程照样排得出来。
+     *                它只影响**怎么挑、怎么排**，**不进检索条件、不覆盖硬规则**。
      * @param hotels 候选酒店，编号 H1..Hm。**可以是空的**（needHotel=false，或飞猪没返回）——
      *               空的时候 prompt 里会明说"本次没有酒店数据"，让模型一律写 none，
      *               而不是让它对着一个不存在的清单瞎编（那会变成一条看不见的假告警）。
@@ -68,8 +73,8 @@ public class PlanComposer {
      *               是这个 prompt 里唯一会"收窄"模型自由度的外部事实（见 renderLegs）。
      * @throws LlmException 调用失败，或两次都没返回可解析的 JSON
      */
-    public PlanDraft draft(TravelParams params, List<PoiCandidate> pois, List<HotelCandidate> hotels,
-                           PlanRules rules, Legs legs) {
+    public PlanDraft draft(TravelParams params, Persona persona, List<PoiCandidate> pois,
+                           List<HotelCandidate> hotels, PlanRules rules, Legs legs) {
         if (pois == null || pois.isEmpty()) {
             // 这一步值得单独挡：不挡的话我们会发一个"候选清单是空的"的 prompt 给模型，
             // 它必然会开始编景点 —— 而这是我们花了一整轮设计要避免的事。
@@ -77,7 +82,7 @@ public class PlanComposer {
             throw new LlmException("没有可用的候选景点，无法排行程");
         }
 
-        String prompt = buildPrompt(params, pois, hotels, rules.spotsPerDay(params.pace()), legs);
+        String prompt = buildPrompt(params, persona, pois, hotels, rules.spotsPerDay(params.pace()), legs);
         Exception lastError = null;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -108,7 +113,7 @@ public class PlanComposer {
      * Prompt 构造
      * ============================================================ */
 
-    private String buildPrompt(TravelParams params, List<PoiCandidate> pois,
+    private String buildPrompt(TravelParams params, Persona persona, List<PoiCandidate> pois,
                                List<HotelCandidate> hotels, int perDay, Legs legs) {
         String candidates = String.join("\n", CandidateCodes.renderLines(pois));
         List<HotelCandidate> hotelPool = hotels == null ? List.of() : hotels;
@@ -125,6 +130,8 @@ public class PlanComposer {
                 并为每天写一个主题、为每个点写一句提示。
 
                 【旅行参数】
+                %s
+
                 %s
 
                 【候选景点】共 %d 条，**只能从这里挑**，编号是 C 开头：
@@ -178,6 +185,15 @@ public class PlanComposer {
                     判断标准只有一条：**今晚住的这家，要紧贴今天和明天要去的点**。
                     最忌讳的一种排法是"白天在一片玩、晚上住到几十公里外的另一片" ——
                     带娃来回这一趟，半天就没了。
+                20. 上面【我对这个用户的判断】那一段（如果给了）是系统从**他的原话**里看出来的，
+                    每条都附了他自己说的那句话。请**据此做取舍**：
+                    比如"怕走路"就优先挑挨得近的几个点、宁可少排一个；
+                    "要午睡"就把中午那段留空；"预算敏感"就少选贵的。
+                    ⚠️ 但**绝对不要在 theme / tips / summary 里替我们解释理由** ——
+                    不要写"因为您想放松，所以今天只安排了两个点"这类句子，
+                    也**不要写任何我们没给过的数字**（距离、耗时、排队时间、价格）。
+                    理由由系统自己算、自己写（它算得出真实数字）；你写的解释，
+                    用户会当成真事，而我们一个字都核实不了。
 
                 【输出格式】
                 只输出一个 JSON 对象，不要任何解释文字，不要 markdown 代码块标记。
@@ -198,6 +214,7 @@ public class PlanComposer {
                 }
                 """.formatted(
                 renderParams(params),
+                renderPersona(persona),
                 pois.size(),
                 candidates,
                 hotelSection,
@@ -205,6 +222,35 @@ public class PlanComposer {
                 params.days() == null || params.days() <= 0 ? 3 : params.days(),
                 params.days() == null || params.days() <= 0 ? 3 : params.days(),
                 perDay);
+    }
+
+    /**
+     * 把"我们看出来的这个用户"渲染给模型。**每个维度都带着他自己的原话** —— 这不是装饰。
+     *
+     * ── 为什么必须带依据 ───────────────────────────────────────────
+     *   只给结论（"怕走路"）模型会把它**和【旅行参数】里的字段当成同一类东西**，
+     *   也就是当成用户明确声明过的需求去执行 —— 于是"我们猜的"在它的输出里
+     *   变成了"用户要的"，再往后就再也分不开了。
+     *   带上依据（"怕走路 —— 他说「想有一个放松的旅行」"）它才知道这是我们**推的**，
+     *   措辞上才会留余地（至少在它想写理由的时候会犹豫一下）。
+     *   **真正兜底的是第 20 条**（不许自己写理由）：prompt 里说清楚是优化，
+     *   而"理由由后端算"才是保证 —— 见 {@link com.hellen.kidtrip.plan.DayReasons}。
+     *
+     * ── 为什么空的时候要写一句"没有" ──────────────────────────────
+     *   留白会被读成"漏拼了一段"。写明"还没有对他的判断"，模型才会老老实实
+     *   按【旅行参数】排一份通用行程 —— 那正是没有 persona 时该有的行为。
+     */
+    private static String renderPersona(Persona p) {
+        if (p == null || p.isEmpty()) {
+            return """
+                    【我对这个用户的判断】
+                    目前还没有从他的对话里看出什么特别的偏好。就按上面的【旅行参数】正常安排。""";
+        }
+        return """
+                【我对这个用户的判断】
+                下面这些是系统从**他的原话**里看出来的（每条都附了他说过的那句话），
+                请据此调整你的取舍 —— 但**不要在输出里解释理由**（见硬性要求第 20 条）：
+                """ + p.renderForPrompt();
     }
 
     /**

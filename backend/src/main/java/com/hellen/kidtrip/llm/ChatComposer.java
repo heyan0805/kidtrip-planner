@@ -3,6 +3,9 @@ package com.hellen.kidtrip.llm;
 import com.hellen.kidtrip.common.JsonText;
 import com.hellen.kidtrip.flyai.CityNames;
 import com.hellen.kidtrip.plan.Message;
+import com.hellen.kidtrip.plan.Persona;
+import com.hellen.kidtrip.plan.PersonaGuard;
+import com.hellen.kidtrip.plan.PersonaTrait;
 import com.hellen.kidtrip.plan.PlanChatData;
 import com.hellen.kidtrip.plan.TravelDates;
 import com.hellen.kidtrip.plan.TravelParams;
@@ -53,6 +56,16 @@ import java.util.List;
  *      · sanitize 兜住  （犯了也没用）——这才是保证。
  *    和 PoiCategories / CandidateCodes 是同一套：**能机械校验的，一律不信模型。**
  *
+ * ⑥ **顺带产出 persona**（2026-10-15 加）—— 同一轮对话里，除了"他说的"（params），
+ *    还要产出"**我们从他话里看出来的**"（persona）。理由不是省一次调用（虽然确实省了），
+ *    而是**它们必须来自同一段上下文**：这一轮他的话推出来的判断，和他这一轮说的字段，
+ *    是同一件事的两面，分开两次调用去推，两边一定会出现不一致。
+ *
+ *    ⚠️ 但产出之后**立刻分道扬镳**：params 走 sanitize + mergedWith，
+ *       persona 走 {@link PersonaGuard} + `mergedWith`（另一套合并规则）。
+ *       两条路的规则**故意相反**，混用会把推错的结论永久粘住 —— 见 Persona 类注释。
+ *       这个类只负责"拆开"，不负责"判断哪个规则对"。
+ *
  * ── 和 PlanComposer 最重要的一处不同：**这里失败不抛异常** ──────────────
  * PlanComposer（排行程）失败必须抛 LlmException —— 没有候选就没有任何退路，报错是唯一诚实的选择。
  * 这里（聊天）失败**降级成一句话**："抱歉，我没太理解你的意思，能再说一遍吗？"，画像原样保留。
@@ -87,14 +100,15 @@ public class ChatComposer {
      * @param current  已经攒出来的画像。**不要传 orDefaults() 过的**，否则"还没问过"会变成"已答"
      * @throws LlmException 调用大模型本身失败（网络 / 超时 / 401 / 限流）
      */
-    public PlanChatData chat(List<Message> messages, TravelParams current) {
+    public PlanChatData chat(List<Message> messages, TravelParams current, Persona currentPersona) {
         TravelParams base = current == null
                 ? TravelParams.empty()
                 : current;
+        Persona basePersona = currentPersona == null ? Persona.empty() : currentPersona;
         // 今天取一次就传下去，不在各处分别取 —— 否则一个请求跨过午夜时，
         // prompt 里的"今天"和校验用的"今天"会不是同一天，出现"模型填的日期被判成过去"这种鬼事。
         LocalDate today = LocalDate.now();
-        String prompt = buildPrompt(messages, base, today);
+        String prompt = buildPrompt(messages, base, basePersona, today);
         Exception lastError = null;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -112,10 +126,32 @@ public class ChatComposer {
                 // ⭐ 先洗净再合并：模型这一轮听出来的东西里，凡是"能机械判断对错"的，
                 //    都不直接采信 —— 见 sanitize 的注释。
                 TravelParams merged = base.mergedWith(sanitize(parsed.patch(), today));
-                log.info("对话一轮：原始输出 {} 字 → reply {} 字，画像 {} → {}",
+                // ⭐⭐ persona 走**另一条路**：过 PersonaGuard 闸门（逐字回查原话），
+                //     再按"同 key 覆盖、没提到的保留"并进去。**绝不能和画像共用 mergedWith。**
+                //     理由见 Persona 类注释第 ① 条：画像那套"没答的字段保留原值"会把
+                //     推错的结论永久粘住，而推论恰恰需要每轮能被推翻。
+                //
+                //     ⚠️ 回查用的是**这一轮实际送进 prompt 的那份历史**（messages 已被 ChatService
+                //        按条数截断）。所以聊得特别久、早期原话已经被挤出窗口时，某条新推论的
+                //        依据可能"查不中"而被丢。这是**刻意的**：我们只认模型看得见的东西 ——
+                //        它没看到那句话却拿它当依据，本来就更可疑。已经并进 basePersona 的旧条目
+                //        不受影响（合并只覆盖 patch 里出现的 key）。
+                PersonaGuard.Screening screening = PersonaGuard.screen(parsed.persona(), messages);
+                Persona mergedPersona = basePersona.mergedWith(screening.toPersona());
+                log.info("对话一轮：原始输出 {} 字 → reply {} 字，画像 {} → {}，判断 {} → {}（本轮 {}/{} 条过闸门）",
                         raw == null ? 0 : raw.length(), parsed.reply().length(),
-                        describe(base), describe(merged));
-                return new PlanChatData(parsed.reply(), merged);
+                        describe(base), describe(merged), basePersona.size(), mergedPersona.size(),
+                        screening.accepted().size(),
+                        screening.accepted().size() + screening.rejected().size());
+                if (!screening.isClean()) {
+                    // 被拦的**必须记下来**，不然"模型没推"和"推了但没拿出原话"就分不出来，
+                    // 而这两个数字的差别决定了 prompt 该怎么改（见 PersonaGuard.Screening 的注释）。
+                    for (PersonaGuard.Rejection r : screening.rejected()) {
+                        log.info("persona 被闸门拦下：{}={}（依据「{}」）—— {}",
+                                r.key(), r.value(), r.evidence(), r.reason());
+                    }
+                }
+                return new PlanChatData(parsed.reply(), merged, mergedPersona);
             } catch (Exception e) {
                 lastError = e;
                 log.warn("第 {} 次尝试：对话输出不是合法 JSON，原始输出前 300 字：{}",
@@ -125,7 +161,7 @@ public class ChatComposer {
 
         // 两次都没解析出来 —— 降级，不抛错（理由见类注释最后一段）
         log.error("两轮都没解析出可用的对话结果，降级回一句兜底话术", lastError);
-        return new PlanChatData(FALLBACK_REPLY, base);
+        return new PlanChatData(FALLBACK_REPLY, base, basePersona);
     }
 
     /* ============================================================
@@ -223,17 +259,30 @@ public class ChatComposer {
      * 解析 —— 纯函数部分，单独抽出来就是为了能测
      * ============================================================ */
 
-    /** 一次对话的解析结果 */
-    record Parsed(String reply, TravelParams patch) {
+    /**
+     * 一次对话的解析结果。
+     *
+     * 三个字段分两类：`reply` + `patch` 是**用户说过的**（照抄、校验后就合并），
+     * `persona` 是**模型推的**（要先过逐字回查的闸门）。**它们在合并那一步分道扬镳**，
+     * 所以这里也不合并成一个"合并后的画像" —— 解析这一层只负责"把模型说的拆开"。
+     *
+     * `persona` 允许是 null（模型这次没写这个字段）—— 那等价于"这一轮没有新判断"，
+     * 由 PersonaGuard.screen 处理成空结果。
+     */
+    record Parsed(String reply, TravelParams patch, List<Persona.Inference> persona) {
     }
 
     /**
-     * 把模型的原始输出解析成 { 话术, 画像补丁 }。
+     * 把模型的原始输出解析成 { 话术, 画像补丁, 判断补丁 }。
      *
      * 抽成包级可见的方法 + 不碰 chatModel，就使它成为**纯函数**：
      * 测试里可以喂各种"模型可能会写出来的鬼东西"进去，
      * 而不用真的花一次调用、等十几秒。
      * 这和 PlanAssembler 能被单测是同一个道理 —— **可测性是设计出来的。**
+     *
+     * ⚠️ 这里**不校验** persona（不看 key 认不认识、不查依据在不在历史里）——
+     *    那是 PersonaGuard 的职责，而且它要**记账**。在解析里顺手筛一遍的话，
+     *    被筛掉的条目会无声消失，排障时只会看到"模型没输出"（见 Persona 类注释最后一段）。
      *
      * @throws Exception JSON 不合法（由调用方决定重试还是降级）
      */
@@ -244,7 +293,7 @@ public class ChatComposer {
                 ? FALLBACK_REPLY
                 : node.reply().strip();
 
-        return new Parsed(reply, node.params());
+        return new Parsed(reply, node.params(), node.persona());
     }
 
     /**
@@ -256,18 +305,23 @@ public class ChatComposer {
      * "模型说没有新信息"和"模型忘了写" —— 而这两件事在合并时**都是保留原值**，
      * 所以结果一致，但把它显式写出来，读代码的人就不用自己去推这一层。
      *
-     * ⚠️ 字段名 params / reply 必须和 prompt 里给的 JSON 例子逐字一致。
+     * ⚠️ `persona` 这里是 `List<Inference>` 而不是 `Persona` —— 因为 prompt 里让它输出的是
+     *    **一个数组**（`"persona":[{...}]`），而 `Persona` 这个 record 只有一个 components
+     *    `inferences`，直接映射会要求写成 `{"inferences":[…]}`。用一个裸数组更自然，
+     *    而且"还没过闸门的原始条目"本来就不该被包成 Persona（Persona 的每一条按约定都是过了闸门的）。
+     *
+     * ⚠️ 字段名 params / reply / persona 必须和 prompt 里给的 JSON 例子逐字一致。
      *    写成 params_ 或 data 都会解析成 null —— 而且**不会报错**，
      *    只会得到一份"什么都没听出来"的对话。这类静默错位整份工程里出现过三次了。
      */
-    record RawChat(String reply, TravelParams params) {
+    record RawChat(String reply, TravelParams params, List<Persona.Inference> persona) {
     }
 
     /* ============================================================
      * Prompt 构造
      * ============================================================ */
 
-    private String buildPrompt(List<Message> messages, TravelParams current, LocalDate today) {
+    private String buildPrompt(List<Message> messages, TravelParams current, Persona persona, LocalDate today) {
         return """
                 你是"童行"的带娃旅行规划助手。你的任务：**通过对话把出行信息问清楚**，并输出结构化结果。
 
@@ -319,7 +373,35 @@ public class ChatComposer {
                    选目的地的参考：亲子+海边 → 珠海；亲子+动物园+大城市 → 广州。
                 8. 出发地和目的地**相同**是合法的（本地游），不要为了不同而改掉其中一个。
 
+                【除了上面那些字段，你还要留意：这个用户是个什么样的人】
+                上面的字段是**他说的**。这一段要的是**你从他的话里看出来的** ——
+                比如他说"这次想放松一点"，那是在说他不想每天折腾。
+                只有下面这 %d 个维度可以记，**不要发明第 %d 个**：
+                %s
+
+                【记这些判断的规矩 —— 这几条比什么都重要，请逐条遵守】
+                1. 每一条判断都必须**拿得出用户的原话**。把支撑这条判断的那一小段**原样抄下来**当依据：
+                   一个字都不要改，不要改写、不要润色、不要补充、不要拼接两句。
+                2. 依据只能来自**用户说过的话**，不能来自你自己说过的话。
+                3. 宁可不记，也不要硬凑。用户没表达出这个维度上的偏好，就**不要输出这一条**。
+                   输出一个空数组是完全可以的，甚至是好的。
+                4. 注意区分"这个人的特点"和"他今天的状态"：
+                     "我想有一个放松的旅行" → 怕走路=少走路   ✓ 他说的是他想要什么
+                     "我今天有点累"         → 怕走路=少走路   ✗ 他说的是今天，不是这个人
+                   拿不准的，不记。
+                5. 用户**明确说了相反方向**的时候，**也要记** —— 那不是"没得记"：
+                     "我们体力好，不用考虑走不动" → 怕走路=无所谓    ✓
+                     "我们不怕挤"                 → 怕人多=不介意    ✓
+                   「无所谓 / 不介意」是一条**有用的判断**：它让系统知道可以排紧凑一些。
+                   它和"用户没提到这个维度"是两件不同的事，前者要记，后者不记。
+                6. 用户改主意了，就用**新的判断覆盖旧的**（这一次输出新的那条）。
+                7. 判断要短，不超过 %d 个字。依据抄一小段就够，不要抄整句长句。
+
                 【已经收集到的信息】
+                %s
+
+                【你已经推出来的判断】
+                下面这些是你在**前几轮**看出来的，供你参考（不要复述它们，只输出这一轮的新发现）：
                 %s
 
                 【对话历史】
@@ -338,12 +420,20 @@ public class ChatComposer {
                     "preferences": ["偏好"] 或 [],
                     "pace": "慢/中/快" 或 null,
                     "stroller": true/false 或 null
-                  }
+                  },
+                  "persona": [
+                    {"key": "walking", "value": "少走路", "evidence": "我想有一个放松的旅行"}
+                  ]
                 }
 
                 ⚠️ params 里**只写这一轮新听出来的字段**，其余一律写 null ——
                 系统会自动和已有信息合并，你不需要复述历史。
-                """.formatted(todayText(today), renderCollected(current), renderHistory(messages));
+                ⚠️ persona 里写**这一轮你新看出来的判断**，一条都没有就写 `[]`。
+                key 只能用上面列出的那几个英文词，原样照抄；evidence 必须是用户的原话。
+                """.formatted(todayText(today),
+                PersonaTrait.size(), PersonaTrait.size() + 1, PersonaTrait.renderForPrompt(),
+                PersonaGuard.VALUE_MAX,
+                renderCollected(current), renderPersona(persona), renderHistory(messages));
     }
 
     /**
@@ -385,6 +475,26 @@ public class ChatComposer {
     /** 还没问到 —— 用一个明确的词，而不是空白。空白会让模型以为这一行是排版错误 */
     private static String answer(String s) {
         return s == null || s.isBlank() ? "还没问过" : s.strip();
+    }
+
+    /**
+     * 把已经推出来的判断渲染给模型看。
+     *
+     * 为什么不复用 `Persona.renderForPrompt()` 直接渲染、而要在外面包一层判空：
+     * 因为**空 persona 渲染出来是空字符串**，而 prompt 里那个位置留白会被模型读成
+     * "这一段的标题下面是空的" —— 它可能以为是我们漏拼了，也可能干脆不去填 persona。
+     * 写明"还没有推出任何判断"才是一个**确定的信息**。
+     *
+     * ⚠️ 这里是**唯一**该出现"已经推出来的判断"的地方 —— 绝不要把它并进
+     *    `renderCollected` 那一段。那一段的每一行都会被模型当**事实**用
+     *    （"节奏：慢"），而判断是**我们推的**，混进去它就会把猜测当事实加固，
+     *    下一轮再拿它当依据 —— 见 Persona 类注释第 ② 条。
+     */
+    private static String renderPersona(Persona p) {
+        if (p == null || p.isEmpty()) {
+            return "（还没有推出任何判断）";
+        }
+        return p.renderForPrompt();
     }
 
     /**

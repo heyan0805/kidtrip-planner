@@ -1,6 +1,7 @@
 package com.hellen.kidtrip.llm;
 
 import com.hellen.kidtrip.plan.Message;
+import com.hellen.kidtrip.plan.Persona;
 import com.hellen.kidtrip.plan.PlanChatData;
 import com.hellen.kidtrip.plan.TravelParams;
 import org.junit.jupiter.api.DisplayName;
@@ -50,7 +51,7 @@ class ChatComposerTest {
                  "params":{"days":3,"childAge":6}}
                 """);
 
-        PlanChatData data = composer(model).chat(TURN, CURRENT);
+        PlanChatData data = composer(model).chat(TURN, CURRENT, Persona.empty());
 
         assertEquals("3 天正好！需要带推车吗？", data.reply());
         assertEquals(3, data.params().days());
@@ -70,7 +71,7 @@ class ChatComposerTest {
                 还需要我补充什么吗？
                 """);
 
-        PlanChatData data = composer(model).chat(TURN, CURRENT);
+        PlanChatData data = composer(model).chat(TURN, CURRENT, Persona.empty());
 
         assertEquals("记下了", data.reply());
         assertEquals(4, data.params().days());
@@ -81,7 +82,7 @@ class ChatComposerTest {
     void missingParamsMeansNoNewInfo() {
         FakeChatModel model = new FakeChatModel("{\"reply\":\"信息已经齐了\"}");
 
-        PlanChatData data = composer(model).chat(TURN, CURRENT);
+        PlanChatData data = composer(model).chat(TURN, CURRENT, Persona.empty());
 
         assertEquals("信息已经齐了", data.reply());
         assertEquals(CURRENT, data.params());
@@ -92,7 +93,7 @@ class ChatComposerTest {
     void blankReplyGetsFallback() {
         FakeChatModel model = new FakeChatModel("{\"reply\":\"   \",\"params\":{\"days\":3}}");
 
-        PlanChatData data = composer(model).chat(TURN, CURRENT);
+        PlanChatData data = composer(model).chat(TURN, CURRENT, Persona.empty());
 
         assertTrue(data.reply().length() > 0);
         assertEquals(3, data.params().days(), "话术兜底了，但画像该拿到的还是要拿到");
@@ -107,7 +108,7 @@ class ChatComposerTest {
                 "呃，我想想……（这里模型开始说人话，不带 JSON）",
                 "{\"reply\":\"好的\",\"params\":{\"days\":3}}");
 
-        PlanChatData data = composer(model).chat(TURN, CURRENT);
+        PlanChatData data = composer(model).chat(TURN, CURRENT, Persona.empty());
 
         assertEquals(2, model.calls(), "必须真的重试了一次");
         assertEquals("好的", data.reply());
@@ -119,7 +120,7 @@ class ChatComposerTest {
     void degradesAfterTwoFailures() {
         FakeChatModel model = new FakeChatModel("不是 JSON", "还不是 JSON");
 
-        PlanChatData data = composer(model).chat(TURN, CURRENT);
+        PlanChatData data = composer(model).chat(TURN, CURRENT, Persona.empty());
 
         assertEquals(2, model.calls(), "只试两次就放弃，不能无限重试");
         assertNotNull(data.reply());
@@ -132,7 +133,8 @@ class ChatComposerTest {
     void callFailureThrows() {
         ChatComposer composer = composer(FakeChatModel.failing(new RuntimeException("connection reset")));
 
-        LlmException e = assertThrows(LlmException.class, () -> composer.chat(TURN, CURRENT));
+        LlmException e = assertThrows(LlmException.class,
+                () -> composer.chat(TURN, CURRENT, Persona.empty()));
 
         assertTrue(e.getMessage().contains("connection reset"), e.getMessage());
     }
@@ -142,7 +144,7 @@ class ChatComposerTest {
     void callFailureIsNotRetried() {
         FakeChatModel model = FakeChatModel.failing(new RuntimeException("timeout"));
 
-        assertThrows(LlmException.class, () -> composer(model).chat(TURN, CURRENT));
+        assertThrows(LlmException.class, () -> composer(model).chat(TURN, CURRENT, Persona.empty()));
 
         assertEquals(1, model.calls());
     }
@@ -155,7 +157,8 @@ class ChatComposerTest {
         // 通过"提示词里到底写了什么"来验证 —— 这是唯一能测 prompt 的办法：
         // 把假模型收到的 prompt 存下来看。
         CapturingModel model = new CapturingModel();
-        composer(model).chat(TURN, new TravelParams(null, "珠海", null, null, null, null, null, null));
+        composer(model).chat(TURN, new TravelParams(null, "珠海", null, null, null, null, null, null),
+                Persona.empty());
 
         String prompt = model.lastPrompt;
         assertTrue(prompt.contains("目的地：珠海"), prompt);
@@ -170,7 +173,7 @@ class ChatComposerTest {
     @DisplayName("⭐ prompt 里必须有「今天」——模型填错年份就是因为它不知道今天几号")
     void promptTellsTheModelToday() {
         CapturingModel model = new CapturingModel();
-        composer(model).chat(TURN, CURRENT);
+        composer(model).chat(TURN, CURRENT, Persona.empty());
 
         String prompt = model.lastPrompt;
         assertTrue(prompt.contains(LocalDate.now().toString()),
@@ -182,7 +185,7 @@ class ChatComposerTest {
     @DisplayName("⭐ prompt 必须点明「区域说法不能当城市」——并且示例里不能再出现「XX周边」")
     void promptForbidsRegionWordsAndTheExampleIsFixed() {
         CapturingModel model = new CapturingModel();
-        composer(model).chat(TURN, CURRENT);
+        composer(model).chat(TURN, CURRENT, Persona.empty());
 
         String prompt = model.lastPrompt;
         assertTrue(prompt.contains("广东周边"), "要拿真实的错误说法当反例讲清楚：" + prompt);
@@ -287,7 +290,7 @@ class ChatComposerTest {
                  "params":{"city":"珠海","days":6,"startDate":"2020-11-17"}}
                 """);
 
-        PlanChatData data = composer(model).chat(TURN, null);
+        PlanChatData data = composer(model).chat(TURN, null, Persona.empty());
 
         assertEquals("珠海", data.params().city());
         assertNotNull(data.params().startDate());
@@ -302,10 +305,140 @@ class ChatComposerTest {
                 new TravelParams(null, "广东周边", null, null, null, null, null, null), SANITIZE_DAY);
 
         CapturingModel model = new CapturingModel();
-        composer(model).chat(TURN, afterRegion);
+        composer(model).chat(TURN, afterRegion, Persona.empty());
 
         assertTrue(model.lastPrompt.contains("目的地：还没问过"),
                 "目的地必须回退成「还没问过」，模型才会再问一次：" + model.lastPrompt);
+    }
+
+    /* ============================================================
+     * persona —— 同一轮里顺带产出"我们从他话里看出来的"
+     * ============================================================ */
+
+    /** 一份"用户在话里露了偏好"的历史。**每条依据都必须能在这里面逐字找到** */
+    private static final List<Message> PERSONA_TURN = List.of(
+            new Message("user", "想带孩子去珠海玩 3 天，这次我想安排得放松一点"),
+            new Message("assistant", "好的，那我按轻松一点的节奏来排。孩子多大了？"),
+            new Message("user", "6 岁，他特别迷恐龙"));
+
+    @Test
+    @DisplayName("模型给出的判断 + 依据是用户原话 → 并进 persona，而且不碰 params")
+    void personaLandsAlongsideParams() {
+        FakeChatModel model = new FakeChatModel("""
+                {"reply":"好，轻松一点",
+                 "params":{"days":3},
+                 "persona":[{"key":"walking","value":"少走路","evidence":"我想安排得放松一点"},
+                            {"key":"interest","value":"恐龙","evidence":"他特别迷恐龙"}]}
+                """);
+
+        PlanChatData data = composer(model).chat(PERSONA_TURN, CURRENT, Persona.empty());
+
+        assertEquals(2, data.persona().size());
+        assertEquals("少走路", data.persona().valueOf("walking"));
+        assertEquals("恐龙", data.persona().valueOf("interest"));
+        assertEquals(3, data.params().days(), "persona 和 params 是两条路，谁都不许踩到对方");
+    }
+
+    @Test
+    @DisplayName("⭐ 依据在历史里找不到 → 整条丢掉（这是 persona 唯一那道防幻觉的关卡）")
+    void fabricatedEvidenceIsDropped() {
+        // 这句话听起来完全合理，但用户没说过 —— 模型为了让判断"有凭据"编了一句。
+        FakeChatModel model = new FakeChatModel("""
+                {"reply":"好",
+                 "persona":[{"key":"walking","value":"少走路","evidence":"我不爱走路，最好少走点"}]}
+                """);
+
+        PlanChatData data = composer(model).chat(PERSONA_TURN, CURRENT, Persona.empty());
+
+        assertTrue(data.persona().isEmpty(),
+                "编造的依据必须被拦下，实际拿到：" + data.persona().inferences());
+        assertEquals("好", data.reply(), "拦一条判断不该影响这一轮的话术");
+    }
+
+    @Test
+    @DisplayName("⭐ 拿助手自己说过的话当依据 → 也必须拦（自证：它的输出不能同时是它的证据）")
+    void assistantWordsCannotBeEvidence() {
+        FakeChatModel model = new FakeChatModel("""
+                {"reply":"好",
+                 "persona":[{"key":"walking","value":"少走路","evidence":"按轻松一点的节奏来排"}]}
+                """);
+
+        PlanChatData data = composer(model).chat(PERSONA_TURN, CURRENT, Persona.empty());
+
+        assertTrue(data.persona().isEmpty(),
+                "这句话是助手说的、不是用户说的，拿它当依据等于自证：" + data.persona().inferences());
+    }
+
+    @Test
+    @DisplayName("增量合并：这一轮没说到的维度要保留（'没输出' ≠ '用户撤回了'）")
+    void previousInferencesSurviveWhenNotMentioned() {
+        Persona previous = Persona.of(List.of(
+                new Persona.Inference("walking", "少走路", "我想安排得放松一点")));
+        FakeChatModel model = new FakeChatModel("""
+                {"reply":"好",
+                 "persona":[{"key":"interest","value":"恐龙","evidence":"他特别迷恐龙"}]}
+                """);
+
+        PlanChatData data = composer(model).chat(PERSONA_TURN, CURRENT, previous);
+
+        assertEquals("少走路", data.persona().valueOf("walking"), "没提到的旧判断必须留着");
+        assertEquals("恐龙", data.persona().valueOf("interest"));
+    }
+
+    @Test
+    @DisplayName("改主意：同一个维度给新判断 → 覆盖旧的（靠 value 覆盖表达，不靠缺失）")
+    void newValueOverwritesOldOne() {
+        Persona previous = Persona.of(List.of(
+                new Persona.Inference("walking", "少走路", "我想安排得放松一点")));
+        FakeChatModel model = new FakeChatModel("""
+                {"reply":"好",
+                 "persona":[{"key":"walking","value":"无所谓","evidence":"他特别迷恐龙"}]}
+                """);
+
+        PlanChatData data = composer(model).chat(PERSONA_TURN, CURRENT, previous);
+
+        assertEquals("无所谓", data.persona().valueOf("walking"));
+        assertEquals(1, data.persona().size(), "覆盖不是追加");
+    }
+
+    @Test
+    @DisplayName("解析彻底失败降级时，已有的 persona 原样保留（和画像一样不能丢）")
+    void personaSurvivesDegrade() {
+        Persona previous = Persona.of(List.of(
+                new Persona.Inference("walking", "少走路", "我想安排得放松一点")));
+        FakeChatModel model = new FakeChatModel("不是 JSON", "还不是 JSON");
+
+        PlanChatData data = composer(model).chat(PERSONA_TURN, CURRENT, previous);
+
+        assertEquals(previous, data.persona());
+        assertEquals(CURRENT, data.params());
+    }
+
+    @Test
+    @DisplayName("没给 persona 字段 → 不报错，等价于'这一轮没有新判断'")
+    void missingPersonaIsFine() {
+        FakeChatModel model = new FakeChatModel("{\"reply\":\"好\",\"params\":{\"days\":3}}");
+
+        PlanChatData data = composer(model).chat(PERSONA_TURN, CURRENT, Persona.empty());
+
+        assertTrue(data.persona().isEmpty());
+        assertEquals(3, data.params().days());
+    }
+
+    @Test
+    @DisplayName("⭐ prompt 里必须教清楚可记的维度、并带上已经推出来的判断")
+    void promptCarriesPersonaSections() {
+        Persona previous = Persona.of(List.of(
+                new Persona.Inference("walking", "少走路", "我想安排得放松一点")));
+        CapturingModel model = new CapturingModel();
+        composer(model).chat(PERSONA_TURN, CURRENT, previous);
+
+        String prompt = model.lastPrompt;
+        assertTrue(prompt.contains("不要发明第"), "维度是闭集，必须在 prompt 里说死：" + prompt);
+        assertTrue(prompt.contains("walking（怕走路）"), "维度和它的中文名都要给：" + prompt);
+        assertTrue(prompt.contains("怕走路：少走路"), "上一轮的判断要带上，否则做不了'改主意'：" + prompt);
+        assertTrue(prompt.contains("依据只能来自"), "自证那条规矩必须在：" + prompt);
+        assertTrue(prompt.contains("明确说了相反方向"), "反向偏好那条规矩必须在（探针实测漏掉它会丢判断）：" + prompt);
     }
 
     /** 只为了把收到的 prompt 存下来看一眼 */
