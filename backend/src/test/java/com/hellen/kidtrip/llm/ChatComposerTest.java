@@ -319,7 +319,7 @@ class ChatComposerTest {
     private static final List<Message> PERSONA_TURN = List.of(
             new Message("user", "想带孩子去珠海玩 3 天，这次我想安排得放松一点"),
             new Message("assistant", "好的，那我按轻松一点的节奏来排。孩子多大了？"),
-            new Message("user", "6 岁，他特别迷恐龙"));
+            new Message("user", "6 岁，他中午还要睡一会儿"));
 
     @Test
     @DisplayName("模型给出的判断 + 依据是用户原话 → 并进 persona，而且不碰 params")
@@ -328,14 +328,14 @@ class ChatComposerTest {
                 {"reply":"好，轻松一点",
                  "params":{"days":3},
                  "persona":[{"key":"walking","value":"少走路","evidence":"我想安排得放松一点"},
-                            {"key":"interest","value":"恐龙","evidence":"他特别迷恐龙"}]}
+                            {"key":"rest","value":"要午睡","evidence":"他中午还要睡一会儿"}]}
                 """);
 
         PlanChatData data = composer(model).chat(PERSONA_TURN, CURRENT, Persona.empty());
 
         assertEquals(2, data.persona().size());
         assertEquals("少走路", data.persona().valueOf("walking"));
-        assertEquals("恐龙", data.persona().valueOf("interest"));
+        assertEquals("要午睡", data.persona().valueOf("rest"));
         assertEquals(3, data.params().days(), "persona 和 params 是两条路，谁都不许踩到对方");
     }
 
@@ -376,13 +376,13 @@ class ChatComposerTest {
                 new Persona.Inference("walking", "少走路", "我想安排得放松一点")));
         FakeChatModel model = new FakeChatModel("""
                 {"reply":"好",
-                 "persona":[{"key":"interest","value":"恐龙","evidence":"他特别迷恐龙"}]}
+                 "persona":[{"key":"rest","value":"要午睡","evidence":"他中午还要睡一会儿"}]}
                 """);
 
         PlanChatData data = composer(model).chat(PERSONA_TURN, CURRENT, previous);
 
         assertEquals("少走路", data.persona().valueOf("walking"), "没提到的旧判断必须留着");
-        assertEquals("恐龙", data.persona().valueOf("interest"));
+        assertEquals("要午睡", data.persona().valueOf("rest"));
     }
 
     @Test
@@ -392,7 +392,7 @@ class ChatComposerTest {
                 new Persona.Inference("walking", "少走路", "我想安排得放松一点")));
         FakeChatModel model = new FakeChatModel("""
                 {"reply":"好",
-                 "persona":[{"key":"walking","value":"无所谓","evidence":"他特别迷恐龙"}]}
+                 "persona":[{"key":"walking","value":"无所谓","evidence":"我想安排得放松一点"}]}
                 """);
 
         PlanChatData data = composer(model).chat(PERSONA_TURN, CURRENT, previous);

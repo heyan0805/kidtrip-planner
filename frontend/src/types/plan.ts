@@ -79,8 +79,8 @@ export interface PlanChatData {
  * 所以卡片上可以放心地把它当"用户原话"展示，不需要前端再验证一遍。
  */
 export interface PersonaInference {
-  /** 维度 key（后端闭集，就这五个） */
-  key: 'walking' | 'crowd' | 'rest' | 'budget' | 'interest'
+  /** 维度 key（后端闭集，就这四个） */
+  key: 'walking' | 'crowd' | 'rest' | 'budget'
   /** 我们推的判断，如「少走路」 */
   value: string
   /** 他的原话（截取的那一小段），如「我想有一个放松的旅行」 */
@@ -89,7 +89,7 @@ export interface PersonaInference {
 
 /**
  * key 的中文名（卡片上用）。**必须和后端 PersonaTrait 的 label 一致** ——
- * 两边各写一份是有意的：这五个词是产品语言不是技术实现，改它属于产品决策，
+ * 两边各写一份是有意的：这四个词是产品语言不是技术实现，改它属于产品决策，
  * 改的时候应该两边一起被人工过目，而不是一处改动静默生效。
  */
 export const PERSONA_LABELS: Record<PersonaInference['key'], string> = {
@@ -97,7 +97,6 @@ export const PERSONA_LABELS: Record<PersonaInference['key'], string> = {
   crowd: '怕人多',
   rest: '要午睡',
   budget: '预算敏感',
-  interest: '孩子的兴趣',
 }
 
 /** 我们对这个用户的理解。空数组 = 还没推出来任何判断 */

@@ -16,20 +16,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * 维度闭集。它是"模型只能在想清楚的几件事上做推论"这条防线的全部实现。
  *
- * 要钉住 5 这个数字：多一个维度意味着多一类**我们没想清楚**的推论被放进来，
+ * 要钉住 4 这个数字：多一个维度意味着多一类**我们没想清楚**的推论被放进来，
  * 而这类错误是静默的（一条错的偏好会一路影响排程，不报错）。
  * 加维度必须是一次显式的产品决定 —— 也就是，必须改这个测试。
  */
-@DisplayName("persona 维度闭集：只有 5 个")
+@DisplayName("persona 维度闭集：只有 4 个")
 class PersonaTraitTest {
 
     @Test
-    @DisplayName("正好 5 个，key 不重复、不空，标签和取值域都有")
-    void has5WellFormedTraits() {
-        assertEquals(5, PersonaTrait.size());
+    @DisplayName("正好 4 个，key 不重复、不空，标签和取值域都有")
+    void has4WellFormedTraits() {
+        assertEquals(4, PersonaTrait.size());
 
         List<String> keys = Arrays.stream(PersonaTrait.values()).map(PersonaTrait::key).toList();
-        assertEquals(5, new HashSet<>(keys).size(), "key 有重复：" + keys);
+        assertEquals(4, new HashSet<>(keys).size(), "key 有重复：" + keys);
 
         for (PersonaTrait t : PersonaTrait.values()) {
             assertFalse(t.key().isBlank(), "key 不能空：" + t);
@@ -56,8 +56,11 @@ class PersonaTraitTest {
         // "节奏" 是 pace、"推车" 是 stroller、"想去哪类景点" 是 preferences。
         // 它们在画像里，persona 再存一遍就是**两处真相**，迟早打架 ——
         // 打架时没人知道该信哪一边。
+        // ⚠️ `interest`（孩子的兴趣）曾经就是这样一个越界的维度：2026-10-15 实测后已移除 ——
+        //    用户说"喜欢海洋馆，动物园"，画像记下两个、persona 只剩一个。
+        //    把它钉进 banned 表里，防的是"哪天有人觉得 persona 该记兴趣"又把它加回来。
         // 所以这里按 key 的字面做一次粗筛：真出现同义词时，人来看这条测试就懂了。
-        List<String> banned = List.of("pace", "stroller", "preferences", "days", "city", "origin", "date", "age");
+        List<String> banned = List.of("pace", "stroller", "preferences", "interest", "days", "city", "origin", "date", "age");
         for (String b : banned) {
             for (PersonaTrait t : PersonaTrait.values()) {
                 assertFalse(t.key().toLowerCase().contains(b),
@@ -70,7 +73,7 @@ class PersonaTraitTest {
     @DisplayName("ofKey：认识 / 不认识 / 大小写 / 首尾空白")
     void resolvesKeys() {
         assertEquals(PersonaTrait.WALKING, PersonaTrait.ofKey("walking"));
-        assertEquals(PersonaTrait.INTEREST, PersonaTrait.ofKey("interest"));
+        assertNull(PersonaTrait.ofKey("interest"), "兴趣归 preferences，不该是 persona 的维度了");
 
         assertEquals(PersonaTrait.WALKING, PersonaTrait.ofKey("  WALKING  "), "空白 + 大小写都要归一");
         assertEquals(PersonaTrait.CROWD, PersonaTrait.ofKey("Crowd"));
@@ -105,7 +108,7 @@ class PersonaTraitTest {
     }
 
     @Test
-    @DisplayName("renderForPrompt：5 个维度都得出现，key 和中文名都要有")
+    @DisplayName("renderForPrompt：4 个维度都得出现，key 和中文名都要有")
     void rendersForPrompt() {
         String line = PersonaTrait.renderForPrompt();
 
@@ -115,7 +118,7 @@ class PersonaTraitTest {
         }
         // 只给 key 的话，模型得靠猜来理解 walking 在问什么；
         // 只给中文名的话，它没法原样回填一个我们认识的 key。
-        assertTrue(line.lines().count() >= 5, "一行一个维度，逐行读才知道哪个是哪个");
+        assertTrue(line.lines().count() >= 4, "一行一个维度，逐行读才知道哪个是哪个");
     }
 
     @Test
@@ -130,15 +133,15 @@ class PersonaTraitTest {
             assertTrue(t.domain().contains("/") || t.domain().contains("如"),
                     "取值域得给出可选方向，否则模型只能自己编一个：" + t.key() + " → " + t.domain());
         }
-        assertEquals(5, PersonaTrait.values().length, "加维度请同时更新这条断言和 PersonaTrait 的类注释");
+        assertEquals(4, PersonaTrait.values().length, "加维度请同时更新这条断言和 PersonaTrait 的类注释");
     }
 
     @Test
-    @DisplayName("没有第 6 个维度能被绕过 —— values() 就是全部")
+    @DisplayName("没有第 5 个维度能被绕过 —— values() 就是全部")
     void closedSetIsExhaustive() {
         // enum 的价值就在这里：想加维度必须改这个文件，
-        // 不可能出现"prompt 里教了 6 个、闸门只认 5 个"这种分叉。
-        List<String> expected = List.of("walking", "crowd", "rest", "budget", "interest");
+        // 不可能出现"prompt 里教了 5 个、闸门只认 4 个"这种分叉。
+        List<String> expected = List.of("walking", "crowd", "rest", "budget");
         List<String> actual = Arrays.stream(PersonaTrait.values()).map(PersonaTrait::key).collect(Collectors.toList());
 
         assertEquals(expected, actual, "维度顺序会被 renderForPrompt 展示给模型，改动要看得见");

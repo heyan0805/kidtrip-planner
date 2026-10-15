@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * 要钉住的三条（按重要性排）：
  *   ① 编造的 evidence 进不去  —— 包括"抄 assistant 自己说过的话"这种自我确认；
- *   ② 自造的 key 进不去      —— 推论只能发生在我们想清楚的 5 个维度上；
+ *   ② 自造的 key 进不去      —— 推论只能发生在我们想清楚的 4 个维度上；
  *   ③ 真话必须进得去         —— 闸门太严等于这个功能不存在，而且失败是静默的。
  *
  * ⚠️ 这些断言都**验证过它能红**（见每条的注释）：把 saidByUser 改成恒真、
@@ -31,7 +31,7 @@ class PersonaGuardTest {
 
     /** 一段真实对话。第 1 句就是用户最典型的"放松"表述 */
     private static final String USER_RELAX = "我想有一个放松的旅行，不想每天赶路";
-    private static final String USER_DINOSAUR = "他最近特别迷恐龙";
+    private static final String USER_REST = "孩子中午要睡一会儿";
     private static final String ASSISTANT_GUESS = "看来您比较在意预算";
 
     private static List<Message> history() {
@@ -40,7 +40,7 @@ class PersonaGuardTest {
                 new Message(Message.ASSISTANT, "好的，请问想去哪个城市？"),
                 new Message(Message.USER, USER_RELAX),
                 new Message(Message.ASSISTANT, "明白，那我尽量把行程排松一点。" + ASSISTANT_GUESS),
-                new Message(Message.USER, USER_DINOSAUR)
+                new Message(Message.USER, USER_REST)
         );
     }
 
@@ -51,13 +51,13 @@ class PersonaGuardTest {
         // 所以"能进"这件事必须和"进不去"一样被钉住。
         PersonaGuard.Screening s = PersonaGuard.screen(
                 List.of(i("walking", "少走路", "不想每天赶路"),
-                        i("interest", "恐龙", USER_DINOSAUR)),
+                        i("rest", "要午睡", USER_REST)),
                 history());
 
         assertTrue(s.isClean(), "两条都该过：" + s.rejected());
         assertEquals(2, s.accepted().size());
         assertEquals("少走路", s.accepted().get(0).value());
-        assertEquals("恐龙", s.accepted().get(1).value());
+        assertEquals("要午睡", s.accepted().get(1).value());
     }
 
     @Test
@@ -225,7 +225,7 @@ class PersonaGuardTest {
     @Test
     @DisplayName("把两句话拼起来当依据 → 不算（已知代价，钉成预期行为）")
     void concatenatedEvidenceIsNotAccepted() {
-        // 用户分两句说了"我想有一个放松的旅行"和"他最近特别迷恐龙"，
+        // 用户分两句说了"我想有一个放松的旅行"和"孩子中午要睡一会儿"，
         // 模型拼成一句当依据。逐条查会把它挡下来。
         //
         // 这是**刻意的**：拼接同时会放行"用户说了 A、也说了 B、所以推出 C"这类假因果。
@@ -233,7 +233,7 @@ class PersonaGuardTest {
         // 好过放过一条编造的依据（一条静默生效的错误偏好）。
         // ⚠️ 这是已知代价，不是 bug。模型该做的是挑其中最能支撑结论的那一句。
         PersonaGuard.Screening s = PersonaGuard.screen(
-                List.of(i("interest", "恐龙", "我想有一个放松的旅行他最近特别迷恐龙")),
+                List.of(i("rest", "要午睡", "我想有一个放松的旅行孩子中午要睡一会儿")),
                 history());
 
         assertTrue(s.accepted().isEmpty());
@@ -317,12 +317,12 @@ class PersonaGuardTest {
     @DisplayName("保序：accepted 和 rejected 都按模型给的顺序")
     void keepsOrder() {
         PersonaGuard.Screening s = PersonaGuard.screen(
-                List.of(i("interest", "恐龙", USER_DINOSAUR),
+                List.of(i("rest", "要午睡", USER_REST),
                         i("walking", "少走路", "没说过的话"),
                         i("walking", "少走路", "不想每天赶路")),
                 history());
 
-        assertEquals(List.of("interest", "walking"),
+        assertEquals(List.of("rest", "walking"),
                 s.accepted().stream().map(Persona.Inference::key).toList());
         assertEquals(1, s.rejected().size());
     }
@@ -349,13 +349,13 @@ class PersonaGuardTest {
         PersonaGuard.Screening s1 = PersonaGuard.screen(
                 List.of(i("walking", "少走路", "不想每天赶路")), history());
         PersonaGuard.Screening s2 = PersonaGuard.screen(
-                List.of(i("interest", "恐龙", USER_DINOSAUR)), history());
+                List.of(i("rest", "要午睡", USER_REST)), history());
 
         Persona persona = Persona.empty().mergedWith(s1.toPersona()).mergedWith(s2.toPersona());
 
         assertEquals(2, persona.size());
         assertEquals("少走路", persona.valueOf("walking"));
-        assertEquals("恐龙", persona.valueOf("interest"));
+        assertEquals("要午睡", persona.valueOf("rest"));
     }
 
     @Test

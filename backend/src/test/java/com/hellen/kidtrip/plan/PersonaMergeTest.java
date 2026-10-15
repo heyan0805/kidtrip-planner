@@ -78,13 +78,13 @@ class PersonaMergeTest {
         // 这里把它钉成一个可执行的事实：
         // 保留错了 → 一条过时偏好影响一次排程；
         // 丢掉错了 → 用户前面聊的全白聊，而且他看不见。
-        Persona patch = of(i("interest", "恐龙", "他最近特别迷恐龙"));
+        Persona patch = of(i("rest", "要午睡", "孩子中午要睡一会儿"));
 
         Persona merged = current().mergedWith(patch);
 
         assertEquals("少走路", merged.valueOf("walking"), "patch 里没有 walking，但它必须还在");
         assertEquals("想省着花", merged.valueOf("budget"));
-        assertEquals("恐龙", merged.valueOf("interest"), "新维度追加");
+        assertEquals("要午睡", merged.valueOf("rest"), "新维度追加");
         assertEquals(3, merged.size());
     }
 
@@ -107,11 +107,10 @@ class PersonaMergeTest {
         Persona p = Persona.empty();
         p = p.mergedWith(of(i("walking", "少走路", "我想有一个放松的旅行")));
         p = p.mergedWith(of(i("rest", "要午睡", "孩子中午要睡一会儿")));
-        p = p.mergedWith(of(i("interest", "火车", "他就喜欢坐火车")));
         p = p.mergedWith(of(i("budget", "想省着花", "预算别太高")));
         p = p.mergedWith(of(i("crowd", "避开人多", "别去人挤人的地方")));
 
-        assertEquals(5, p.size());
+        assertEquals(4, p.size());
         assertEquals("少走路", p.valueOf("walking"), "第一轮那条必须还在");
         assertEquals("避开人多", p.valueOf("crowd"));
     }
