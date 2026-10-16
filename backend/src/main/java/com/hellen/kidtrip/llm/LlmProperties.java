@@ -2,6 +2,8 @@ package com.hellen.kidtrip.llm;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.Map;
+
 /**
  * 大模型接入配置，对应 application.yaml 里的 kidtrip.llm.*。
  *
@@ -26,8 +28,40 @@ public record LlmProperties(
         /** 抽样温度。null → 0.3 */
         Double temperature,
         /** 单次调用超时（秒）。<= 0 → 90 */
-        Integer timeoutSeconds
+        Integer timeoutSeconds,
+        /**
+         * 要不要带 `enable_thinking` 这个请求体参数。**三态，null 也是一个有意义的值**：
+         *   null  → 请求体里完全不出现这个字段（"不干预，用厂商默认"）；
+         *   true  → 显式打开思考；
+         *   false → 显式关闭思考。
+         *
+         * ── 为什么必须做成三态，而不是"默认 false" ──────────────────────
+         *   因为这个参数**不是 OpenAI 规范的一部分**，是通义/百炼的扩展字段。
+         *   DeepSeek、月之暗面那些兼容厂商看到一个自己不认识的字段会怎么反应，
+         *   取决于它们各自的实现（有的直接 400，有的静默忽略）——
+         *   我们没有任何证据，也不该拿"换个 base-url 就能跑"这条设计去赌。
+         *   所以：**想关思考就显式写 false，不写就一个字段都不发。**
+         *   拿不准时不给对方发它没要求的东西，和 Message.normalizedRole 里
+         *   "拿不准当 user" 是同一种取舍：选代价小的那一边。
+         *
+         * ── 为什么这个开关是必须的（实测，2026-10-15）───────────────────
+         *   千问 3.x 系列**默认开着思考**，而思考 token 是白等的时间：
+         *   同样的 1500 字请求，思考开 → 9843 个 token（其中 8866 是思考），
+         *   而**非流式**请求在模型思考期间线上一个字节都不流动 ——
+         *   通义那个专用网关（*.maas.aliyuncs.com）会把它当空闲连接掐掉，
+         *   客户端只看到 `IOException: EOF reached while reading`。
+         *   停掉思考之后同一个请求只用 519 个 token、11 秒，稳定通过。
+         *   这一项不是"优化"，是"能不能用"。
+         */
+        Boolean enableThinking
 ) {
+
+    /**
+     * 要额外塞进请求体的字段。null → 空 map（一个字节都不加）。
+     */
+    public Map<String, Object> extraBodyParams() {
+        return enableThinking == null ? Map.of() : Map.of("enable_thinking", enableThinking);
+    }
 
     public LlmProperties {
         if (apiKey == null || apiKey.isBlank()) {

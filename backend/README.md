@@ -428,6 +428,43 @@ prompt 里不给模型经纬度数字（让 LLM 比两串坐标是碰运气）�
 
 ---
 
+**⑩ 换到通义千问后"全部超时"：根因是它默认开着思考（2026-10-15）。**
+
+现象：把 `langchain4j` 从 DeepSeek 切到通义（base-url 换成百炼的专用网关、模型换 `qwen3.8-flash`）之后，
+对话勉强能回，**一生成行程就失败**，报一句 `大模型调用失败：java.io.IOException: EOF reached while reading`，
+而且前后要等 **130 秒**。
+
+排查（每一步都实测过，不是推断）：
+- **不是网络、不是密钥、不是模型名**。拿真 key 打同一个网关：短请求 2.1 秒返回 200，
+  `/models` 也能列出 `qwen3.8-flash`。公网那个 `dashscope.aliyuncs.com` 用这把 key 反而是
+  0.47 秒回 401 `invalid_api_key` —— 因为 `sk-ws-` 是**工作区密钥**，只对 `*.maas.aliyuncs.com`
+  那个专属网关有效，不是公网百炼的 key。
+- **掐断点很稳定**。同一句长请求（`max_tokens` 拉大）：非流式**一律在 ~30.8 秒**被掐
+  （`schannel: server closed abruptly`）；换成**流式**，同一个请求跑满 **136 秒**正常 200。
+  ⇒ 掐的是**空闲连接**，不是"网关不让你生成长的"。
+- **响应里的用量把真凶指出来了**：那句流式请求总共 9843 个 token，其中 **8866 个是思考 token**
+  （`reasoning_tokens`）。千问 3.x **默认开着思考**，而思考期间**线上一个字节都不流动** ——
+  非流式请求在网关眼里就是一条干等的连接，于是被当空闲掐掉。
+  `enable_thinking: false` 之后同一个请求只剩 **519 个 token、11 秒**。
+- 那 130 秒也对上了：langchain4j 失败会重试（默认共 3 次尝试），3 × ~30 秒被掐 + 检索时间 ≈ 130 秒。
+
+改法（3 个文件）：`LlmProperties` 加一个**三态**的 `enableThinking`（不写 = 请求体里不出现该字段、
+`true`/`false` = 显式发），`LlmConfig` 用 `customParameters(...)` 塞进请求体，`application.yaml`
+写 `enable-thinking: false`。**为什么是三态而不是布尔**：这个字段是通义私有的，不是 OpenAI 规范，
+换回 DeepSeek 那类不认它的厂商时应该"整行删掉"而不是"改成 true" —— 见第 7 节那张表下面的说明。
+
+验收：
+- 同一场景（深圳 → 上海 5 天）端到端 **54.4 秒返回 200**，行程完整（真实 POI 名 / 坐标 / 飞猪链接）；
+  改动前是 130 秒后报错。
+- 日志里 `"enable_thinking" : false` 出现 2 次（generate 的两条大模型调用），
+  `reasoning_content` 出现 **0 次** —— 关思考是真进了请求体，不是配置写了没用。
+- 顺带测了这个网关上的候选模型（同一句"珠海 2 天行程"）：
+  `qwen-plus` / `qwen3.5-flash` → **400 Model.Unsupported**（`/models` 列了但没开通）；
+  `qwen3.7-flash` → 2116 token（1713 是思考）、**31 秒**；
+  `qwen3.8-flash` → 271 token、6.2 秒。**`qwen3.8-flash` 是这批里最快的**，选它没错。
+
+---
+
 ## 7. 配置速查
 
 全部在 `src/main/resources/application.yaml`。**两个密钥类配置故意没有默认值。**
@@ -447,6 +484,16 @@ prompt 里不给模型经纬度数字（让 LLM 比两串坐标是碰运气）�
 | `kidtrip.llm.model-name` | `deepseek-chat` | |
 | `kidtrip.llm.temperature` | `0.3` | 见第 5 节那个取舍 |
 | `kidtrip.llm.timeout-seconds` | `90` | 出 3 天行程 JSON 实测 10~30 秒 |
+| `kidtrip.llm.enable-thinking` | 不写 = 不发该字段 | **三态**：不写 / `true` / `false`。用通义千问 3.x 时必须写 `false`，否则全超时 —— 见第 6 节 ⑩ |
+
+### 换厂商时最容易踩的一个坑：`enable-thinking`
+
+`enable_thinking` **不是 OpenAI 规范的一部分**，是通义/百炼的私有扩展字段。所以它是三态，
+不是布尔：不写 = 请求体里一个字节都不加（"用厂商默认"），写成 `false` 才是显式关掉思考。
+
+为什么要做成这样：本项目选 `OpenAiChatModel` 的理由就是"换 base-url 即可换厂商"，
+而各家对**不认识的字段**反应不一（有的 400，有的静默忽略）。我们没有证据，就不该赌。
+**给 DeepSeek 那种不认这个字段的厂商时，把这一行整行删掉，不要改成 `true`。**
 
 ---
 

@@ -32,6 +32,11 @@ public class LlmConfig {
                 .modelName(props.modelName())
                 .temperature(props.temperature())
                 .timeout(Duration.ofSeconds(props.timeoutSeconds()))
+                // 额外请求体字段（目前只有 enable_thinking，见 LlmProperties）。
+                // 为什么不用 .reasoningEffort(...)：那是 OpenAI 的推理档位（low/medium/high），
+                // 而通义这个网关认的是自己的 enable_thinking。名字看着像同一件事，
+                // 其实是两个厂商各自的私有字段 —— 用谁的接口就发谁认的字段。
+                .customParameters(props.extraBodyParams())
                 // 打开请求/响应日志。
                 // 在"模型不听话"这类问题面前，能看到**实际发出去的 prompt** 是唯一有效的调试手段 ——
                 // 否则你只能对着自己的代码猜"是不是拼错了"。
