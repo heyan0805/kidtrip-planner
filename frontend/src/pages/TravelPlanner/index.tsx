@@ -74,15 +74,15 @@ export default function TravelPlanner() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gh-canvas">
       <div className="mx-auto max-w-5xl px-4 py-8">
         <header className="flex items-baseline justify-between">
-          <h1 className="text-xl font-semibold text-gray-900">童行 · 带娃旅游规划器</h1>
+          <h1 className="text-xl font-semibold text-gh-fg">童行 · 带娃旅游规划器</h1>
           <button
             type="button"
             onClick={chat.reset}
             disabled={busy || (chat.messages.length === 0 && !chat.plan)}
-            className="text-sm text-gray-500 hover:text-gray-800 disabled:opacity-40"
+            className="text-sm text-gh-fg-muted hover:text-gh-fg disabled:opacity-40"
           >
             重新开始
           </button>
@@ -90,17 +90,17 @@ export default function TravelPlanner() {
 
         {/* Mock 提示。必须显眼 —— 不提示等于把假数据当成真结果给用户 */}
         {chat.mockNotice && (
-          <div className="mt-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900">
+          <div className="mt-4 rounded-lg border border-[#d4a72c66] bg-[#fff8c5] px-4 py-2 text-sm text-gh-fg">
             ⚠️ {chat.mockNotice}
           </div>
         )}
 
         <div className="mt-6 grid gap-6 md:grid-cols-[1fr_320px]">
           {/* ── 左：对话区 ────────────────────────────────── */}
-          <section className="flex min-h-[520px] flex-col rounded-xl border border-gray-200 bg-white">
+          <section className="flex min-h-[520px] flex-col rounded-lg border border-gh-border bg-white shadow-sm">
             <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto p-4">
               {chat.messages.length === 0 && (
-                <p className="text-sm text-gray-400">
+                <p className="text-sm text-gh-fg-faint">
                   比如说：「想带孩子去珠海玩 3 天，孩子 6 岁」—— 我会一轮轮把信息问清楚。
                 </p>
               )}
@@ -110,26 +110,26 @@ export default function TravelPlanner() {
                 <div key={m.id} className={m.role === 'user' ? 'text-right' : 'text-left'}>
                   <span
                     className={
-                      'inline-block max-w-[85%] whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ' +
+                      'inline-block max-w-[85%] whitespace-pre-wrap rounded-2xl border px-3 py-2 text-sm ' +
                       (m.role === 'user'
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-gray-100 text-gray-800')
+                        ? 'border-[#b1d3f0] bg-gh-accent-soft text-gh-fg'
+                        : 'border-gh-border-muted bg-gh-canvas text-gh-fg')
                     }
                   >
                     {m.content}
                   </span>
                 </div>
               ))}
-              {chat.sending && <p className="text-xs text-gray-400">正在想…</p>}
+              {chat.sending && <p className="text-xs text-gh-fg-faint">正在想…</p>}
             </div>
 
             {chat.error && (
-              <div className="mx-4 mb-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
+              <div className="mx-4 mb-2 rounded-lg border border-[#ff818266] bg-[#ffebe9] px-3 py-2 text-sm text-gh-red">
                 {chat.error}
               </div>
             )}
 
-            <div className="flex gap-2 border-t border-gray-200 p-3">
+            <div className="flex gap-2 border-t border-gh-border-muted p-3">
               <input
                 ref={inputRef}
                 value={draft}
@@ -144,14 +144,14 @@ export default function TravelPlanner() {
                 }}
                 placeholder={busy ? '请稍等这一轮结束…' : '说说你的计划'}
                 disabled={busy}
-                className="flex-1 rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-blue-500 disabled:bg-gray-50"
+                className="flex-1 rounded-md border border-gh-border bg-white px-3 py-1.5 text-sm text-gh-fg outline-none focus:border-gh-accent focus:ring-2 focus:ring-[#0969da33] disabled:bg-gh-canvas"
               />
               <button
                 type="button"
                 onClick={() => void submit()}
                 // 忙碌时禁用，而不是"点了没反应" —— 闸门在 hook 里，这里要让它可见
                 disabled={busy || !draft.trim()}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:bg-gray-300"
+                className="rounded-md bg-gh-green px-4 py-1.5 text-sm font-medium text-white hover:bg-gh-green-hover disabled:opacity-50"
               >
                 发送
               </button>
@@ -167,22 +167,27 @@ export default function TravelPlanner() {
                 哪些格子是他说的、哪些是我们添的 —— 这个边界必须看得见。 */}
             <PersonaCard persona={chat.persona} />
 
-            <button
-              type="button"
-              onClick={() => void chat.generate()}
-              disabled={!chat.canGenerate || busy}
-              className="w-full rounded-lg bg-gray-900 px-4 py-2.5 text-sm font-medium text-white hover:bg-gray-800 disabled:bg-gray-300"
-            >
-              {chat.generating ? '正在生成…' : '生成行程'}
-            </button>
-            {!chat.canGenerate && (
-              // 点不了的时候必须说清**为什么**。一个灰着的按钮、不写原因，
-              // 用户只会以为界面坏了，而不是回去把信息补上 ——
-              // 而这恰好是他唯一能做的动作。
-              <p className="text-xs text-amber-700">
-                还差{missingLabels(chat.missingFields)} —— 这几项各自直接决定查什么、怎么排。
-              </p>
-            )}
+            {/* CTA 常驻可视区：右栏比一屏高时，按钮会钉在视口底部跟着你走 ——
+                "信息齐了，就差你点这一下" 的动作不能藏在滚动条底下。
+                sticky 只在"自然位置在屏外"时生效，滚过右栏底（去看行程）就正常随页走。 */}
+            <div className="sticky bottom-4 z-10">
+              <button
+                type="button"
+                onClick={() => void chat.generate()}
+                disabled={!chat.canGenerate || busy}
+                className="w-full rounded-md bg-gh-green px-4 py-2 text-sm font-medium text-white shadow-md hover:bg-gh-green-hover disabled:opacity-50"
+              >
+                {chat.generating ? '正在生成…' : '生成行程'}
+              </button>
+              {!chat.canGenerate && (
+                // 点不了的时候必须说清**为什么**。一个灰着的按钮、不写原因，
+                // 用户只会以为界面坏了，而不是回去把信息补上 ——
+                // 而这恰好是他唯一能做的动作。
+                <p className="mt-2 rounded-lg border border-[#d4a72c66] bg-[#fff8c5] px-3 py-1.5 text-xs text-gh-fg">
+                  还差{missingLabels(chat.missingFields)} —— 这几项各自直接决定查什么、怎么排。
+                </p>
+              )}
+            </div>
             {/* 原来这里是一句"这一步要真的去查飞猪、再让模型排期，25~60 秒是正常的"。
                 它被这张面板取代了 —— 那句话在解释"为什么这么久"，
                 而面板直接把正在走的每一步摊开。**解释不如让人看见。**
@@ -253,10 +258,12 @@ function ProfileCard({
   missing: Array<keyof TravelParams>
 }) {
   return (
-    <div className="rounded-xl border border-gray-200 bg-white p-4">
-      <h2 className="text-sm font-medium text-gray-900">已收集的信息</h2>
-      <p className="mt-1 text-xs text-gray-400">这就是"上下文"里被提炼出来的那部分</p>
-      <dl className="mt-3 space-y-2">
+    <div className="rounded-lg border border-gh-border bg-white p-4 shadow-sm">
+      <h2 className="text-sm font-semibold text-gh-fg">已收集的信息</h2>
+      <p className="mt-0.5 text-xs text-gh-fg-faint">这就是"上下文"里被提炼出来的那部分</p>
+      {/* 时间轴：竖线画在 dl 上（before），每个字段一颗点 ——
+          填了的实心、还空着的空心描金，一眼看出"聊到哪了" */}
+      <dl className="relative mt-3 space-y-2.5 before:absolute before:bottom-2 before:left-[3.5px] before:top-2 before:w-px before:bg-gh-border">
         {FIELDS.map((f) => {
           // ⭐ 必填项还空着时，在**这个格子本身**上说清楚 ——
           //    它是"生成按钮为什么点不了"在页面上的答案，
@@ -264,8 +271,14 @@ function ProfileCard({
           const required = REQUIRED_FIELDS.includes(f.key)
           const blank = missing.includes(f.key)
           return (
-            <div key={f.key} className="flex items-start justify-between gap-3 text-sm">
-              <dt className="text-gray-500">
+            <div key={f.key} className="flex items-start gap-2.5 text-sm">
+              <span
+                className={
+                  'z-10 mt-1.5 h-2 w-2 shrink-0 rounded-full ring-4 ring-white ' +
+                  (blank ? 'border-[1.5px] border-[#d4a72c] bg-white' : 'bg-gh-fg-faint')
+                }
+              />
+              <dt className="flex-1 text-gh-fg-muted">
                 {f.label}
                 {required && (
                   <span className="ml-0.5 text-amber-600" title="必填">
@@ -273,7 +286,7 @@ function ProfileCard({
                   </span>
                 )}
               </dt>
-              <dd className={'text-right font-medium ' + (blank ? 'text-amber-600' : 'text-gray-900')}>
+              <dd className={'text-right font-medium ' + (blank ? 'text-[#9a6700]' : 'text-gh-fg')}>
                 {renderField(f.key, params)}
               </dd>
             </div>
@@ -282,7 +295,7 @@ function ProfileCard({
       </dl>
       {/* 这句解释是必要的：不然"为什么有的格子带星、有的不带"就成了一个要猜的事。
           同时它把"不填也能继续"明说出来 —— 隐含的可选项等于没有可选项。 */}
-      <p className="mt-3 text-[11px] leading-snug text-gray-400">
+      <p className="mt-3 border-t border-gh-border-muted pt-2.5 text-[11px] leading-snug text-gh-fg-faint">
         带 * 的五项必须填 —— 它们各自直接决定查什么、怎么排。
         其余不想说就留空，系统按带娃出行的常规替你定。
       </p>
@@ -335,24 +348,24 @@ function renderField(key: keyof TravelParams, p: TravelParams): string {
 function PersonaCard({ persona }: { persona: Persona }) {
   if (persona.inferences.length === 0) return null
   return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-      <h2 className="text-sm font-medium text-amber-900">我这样理解你</h2>
-      <p className="mt-1 text-xs text-amber-700">从你的话里推出来的，每条都附你自己的原话</p>
-      <ul className="mt-3 space-y-2.5">
+    // 这张卡就是截图里那张 GitHub changelog 卡的同构：
+    // 白卡 + 左侧竖线时间轴 + 「小灰字（维度）→ 深色标题（判断）→ 小灰字（你的原话）」
+    <div className="rounded-lg border border-gh-border bg-white p-4 shadow-sm">
+      <h2 className="text-sm font-semibold text-gh-fg">我这样理解你</h2>
+      <p className="mt-0.5 text-xs text-gh-fg-faint">从你的话里推出来的，每条都附你自己的原话</p>
+      <ul className="relative mt-3 space-y-3 before:absolute before:bottom-2 before:left-[3.5px] before:top-2 before:w-px before:bg-gh-border">
         {persona.inferences.map((it) => (
-          <li key={it.key} className="text-sm">
-            <span className="text-amber-800">{PERSONA_LABELS[it.key]}</span>
-            <span className="mx-1.5 text-amber-400">·</span>
-            <span className="font-medium text-gray-900">{it.value}</span>
+          <li key={it.key} className="relative pl-5">
+            <span className="absolute left-0 top-1 h-2 w-2 rounded-full bg-[#d4a72c] ring-4 ring-white" />
+            <p className="text-xs leading-4 text-gh-fg-muted">{PERSONA_LABELS[it.key]}</p>
+            <p className="mt-0.5 text-sm font-medium leading-snug text-gh-fg">{it.value}</p>
             {it.evidence && (
-              <p className="mt-1 border-l-2 border-amber-300 pl-2 text-xs text-gray-500">
-                你说过：「{it.evidence}」
-              </p>
+              <p className="mt-0.5 text-xs text-gh-fg-faint">你说过：「{it.evidence}」</p>
             )}
           </li>
         ))}
       </ul>
-      <p className="mt-3 text-[11px] leading-snug text-amber-700/80">
+      <p className="mt-3 border-t border-gh-border-muted pt-2.5 text-[11px] leading-snug text-gh-fg-faint">
         推错了就直接说（比如「其实我们体力很好」），下一轮会更新。
       </p>
     </div>
@@ -399,30 +412,30 @@ function GeneratingPanel({ progress }: { progress: PlanProgress | null }) {
   const steps = progress?.steps ?? []
 
   return (
-    <div className="rounded-xl border border-blue-200 bg-blue-50/60 p-3">
+    <div className="rounded-lg border border-gh-border bg-white p-3 shadow-sm">
       <div className="flex items-baseline justify-between">
-        <span className="text-xs font-medium text-gray-900">正在生成行程</span>
-        <span className="text-xs tabular-nums text-gray-500">
+        <span className="text-xs font-medium text-gh-fg">正在生成行程</span>
+        <span className="text-xs tabular-nums text-gh-fg-muted">
           已用 {Math.floor(elapsedMs / 1000)} 秒
         </span>
       </div>
 
       {/* 不确定态扫光。它不知道终点在哪 —— 这正是我们要表达的意思，不是没做完 */}
-      <div className="mt-2 h-1 overflow-hidden rounded-full bg-blue-100">
-        <div className="h-full w-1/3 animate-sweep rounded-full bg-blue-500" />
+      <div className="mt-2 h-1 overflow-hidden rounded-full bg-gh-accent-soft">
+        <div className="h-full w-1/3 animate-sweep rounded-full bg-gh-accent" />
       </div>
 
       {steps.length > 0 ? (
-        <ol className="mt-3 space-y-1.5">
+        <ol className="relative mt-3 space-y-1.5 before:absolute before:bottom-2 before:left-[6.5px] before:top-2 before:w-px before:bg-gh-border-muted">
           {steps.map((s) => (
             <StepLine key={s.key} step={s} />
           ))}
         </ol>
       ) : (
-        <p className="mt-3 text-xs text-gray-500">正在查飞猪，这一步要几十秒。</p>
+        <p className="mt-3 text-xs text-gh-fg-muted">正在查飞猪，这一步要几十秒。</p>
       )}
 
-      <p className="mt-2 text-[11px] leading-snug text-gray-400">
+      <p className="mt-2 text-[11px] leading-snug text-gh-fg-faint">
         每步要花多久事先不知道，所以这里只说走到哪一步，不报百分比。
       </p>
     </div>
@@ -438,31 +451,31 @@ function GeneratingPanel({ progress }: { progress: PlanProgress | null }) {
 function StepLine({ step }: { step: PlanProgressStep }) {
   return (
     <li className="flex items-center gap-2 text-xs">
-      <span className="flex h-3.5 w-3.5 shrink-0 items-center justify-center leading-none">
-        {step.state === 'DONE' && <span className="text-green-600">✓</span>}
-        {step.state === 'FAILED' && <span className="text-red-600">✕</span>}
+      <span className="z-10 flex h-3.5 w-3.5 shrink-0 items-center justify-center leading-none">
+        {step.state === 'DONE' && <span className="text-gh-green">✓</span>}
+        {step.state === 'FAILED' && <span className="text-gh-red">✕</span>}
         {step.state === 'RUNNING' && (
-          <span className="h-2 w-2 animate-breathe rounded-full bg-blue-600" />
+          <span className="h-2 w-2 animate-breathe rounded-full bg-gh-accent ring-4 ring-white" />
         )}
         {step.state === 'PENDING' && (
-          <span className="h-2 w-2 rounded-full border border-gray-300" />
+          <span className="h-2 w-2 rounded-full border border-gh-border bg-white ring-4 ring-white" />
         )}
       </span>
 
       <span
         className={
           step.state === 'RUNNING'
-            ? 'truncate font-medium text-gray-900'
+            ? 'truncate font-medium text-gh-fg'
             : step.state === 'DONE'
-              ? 'truncate text-gray-500'
-              : 'truncate text-gray-400'
+              ? 'truncate text-gh-fg-muted'
+              : 'truncate text-gh-fg-faint'
         }
       >
         {step.label}
       </span>
 
       {/* tookMs 为 null == 还没走完。**不能写成 `!step.tookMs`** —— 那样"耗时 0.0 秒"也会被当成没走完 */}
-      <span className="ml-auto shrink-0 tabular-nums text-gray-400">
+      <span className="ml-auto shrink-0 tabular-nums text-gh-fg-faint">
         {step.tookMs !== null
           ? formatSeconds(step.tookMs)
           : step.state === 'RUNNING'
@@ -514,23 +527,23 @@ function PlanView({
 
   return (
     <section className="mt-6 space-y-4">
-      <div className="rounded-xl border border-gray-200 bg-white p-4">
-        <h2 className="text-base font-medium text-gray-900">{plan.summary}</h2>
-        <p className="mt-2 text-xs text-gray-500">
+      <div className="rounded-lg border border-gh-border bg-white p-4 shadow-sm">
+        <h2 className="text-base font-semibold text-gh-fg">{plan.summary}</h2>
+        <p className="mt-2 text-xs text-gh-fg-muted">
           查了 {plan.provenance.searchRounds} 轮飞猪 · 命中 {plan.provenance.candidatesFound} 条 ·
           可用 {plan.provenance.candidatesKept} 条 · 耗时 {(plan.provenance.elapsedMs / 1000).toFixed(1)} 秒
         </p>
         {swapCount > 0 && (
-          <p className="mt-2 text-xs text-blue-700">
+          <p className="mt-2 text-xs text-gh-accent">
             你手动换过 {swapCount} 个点 —— 每个换过的点旁边都有「恢复原样」
           </p>
         )}
       </div>
 
       {plan.warnings.length > 0 && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50 p-4">
-          <h3 className="text-sm font-medium text-amber-900">注意事项</h3>
-          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-amber-900">
+        <div className="rounded-lg border border-[#d4a72c66] bg-[#fff8c5] p-4">
+          <h3 className="text-sm font-semibold text-gh-fg">注意事项</h3>
+          <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gh-fg">
             {plan.warnings.map((w, i) => (
               <li key={i}>{w}</li>
             ))}
@@ -538,29 +551,36 @@ function PlanView({
         </div>
       )}
 
-      {days.map((d, i) => (
-        <DayCard
-          key={d.day}
-          day={d}
-          stay={stays.get(d.day)}
-          isLast={i === days.length - 1}
-          // ⭐ 备选清单**每天算一次**（不是每个点算一次）：
-          //    它只依赖"这一天的中心"和"整份行程用了哪些点"，这两个和"你在换哪一个"无关。
-          //    所以同一天里每个点看到的清单是一样的 —— 这是对的：
-          //    问的是"这一天附近还能去哪儿"，不是"这个点的替代品是什么"。
-          alternatives={alternativesFor(d, days, plan.spotPool)}
-          swaps={swaps}
-          onSwap={onSwap}
-          onRestore={onRestore}
-        />
-      ))}
+      {/* 行程天用 GitHub changelog 式的时间轴串起来（截图那张卡的同构）：
+          竖线 + 每天一颗节点，"第 1 天、第 2 天"读起来才像"一段一段走过的旅程"，
+          而不是一张张孤立的卡片。 */}
+      <div className="relative ml-2 space-y-4 pl-6 before:absolute before:bottom-6 before:left-[4.5px] before:top-6 before:w-px before:bg-gh-border">
+        {days.map((d, i) => (
+          <div key={d.day} className="relative">
+            <span className="absolute -left-6 top-5 z-10 h-2.5 w-2.5 rounded-full bg-gh-fg-faint ring-4 ring-gh-canvas" />
+            <DayCard
+              day={d}
+              stay={stays.get(d.day)}
+              isLast={i === days.length - 1}
+              // ⭐ 备选清单**每天算一次**（不是每个点算一次）：
+              //    它只依赖"这一天的中心"和"整份行程用了哪些点"，这两个和"你在换哪一个"无关。
+              //    所以同一天里每个点看到的清单是一样的 —— 这是对的：
+              //    问的是"这一天附近还能去哪儿"，不是"这个点的替代品是什么"。
+              alternatives={alternativesFor(d, days, plan.spotPool)}
+              swaps={swaps}
+              onSwap={onSwap}
+              onRestore={onRestore}
+            />
+          </div>
+        ))}
+      </div>
 
       {/* 账本：真实发出去的查询命令。用户有权看见"这份东西是怎么来的" */}
-      <details className="rounded-xl border border-gray-200 bg-white p-4">
-        <summary className="cursor-pointer text-sm font-medium text-gray-900">
+      <details className="rounded-lg border border-gh-border bg-white p-4 shadow-sm">
+        <summary className="cursor-pointer text-sm font-semibold text-gh-fg">
           这份行程是怎么来的（{plan.provenance.queries.length} 次查询）
         </summary>
-        <div className="mt-3 space-y-2 text-xs text-gray-600">
+        <div className="mt-3 space-y-2 text-xs text-gh-fg-muted">
           <p>
             检索条件：类别{' '}
             {plan.provenance.retrievalPlan.wantedCategories.length > 0
@@ -570,7 +590,7 @@ function PlanView({
           </p>
           <ul className="space-y-1 font-mono">
             {plan.provenance.queries.map((q, i) => (
-              <li key={i} className="break-all rounded bg-gray-50 px-2 py-1">{q}</li>
+              <li key={i} className="break-all rounded bg-gh-canvas px-2 py-1">{q}</li>
             ))}
           </ul>
           {/* 备选池的大小也报出来 —— 它是"这次查询的产出真的被用起来了"最直接的证据：
@@ -616,8 +636,8 @@ function DayCard({
   onRestore: (day: number, index: number) => void
 }) {
   return (
-    <article className="rounded-xl border border-gray-200 bg-white p-4">
-      <h3 className="text-sm font-medium text-gray-900">
+    <article className="rounded-lg border border-gh-border bg-white p-4 shadow-sm">
+      <h3 className="text-sm font-semibold text-gh-fg">
         第 {day.day} 天 · {day.theme}
       </h3>
 
@@ -625,7 +645,7 @@ function DayCard({
           相隔多远、中午留了多长、几点到站）全部来自后端本地算出的事实 ——
           不交给模型写，因为模型会写出"这里不用走很多路"这种**没法核对**的句子。
           后端"没有可说的"就给 null，这里就不渲染：宁可不解释，也不硬凑一句。 */}
-      {day.why && <p className="mt-1 text-xs leading-relaxed text-gray-500">💡 {day.why}</p>}
+      {day.why && <p className="mt-1 text-xs leading-relaxed text-gh-fg-muted">💡 {day.why}</p>}
 
       <ul className="mt-3 space-y-2">
         {day.spots.map((s, i) => (
@@ -640,10 +660,10 @@ function DayCard({
             onRestore={() => onRestore(day.day, i)}
           />
         ))}
-        {day.spots.length === 0 && <li className="text-sm text-gray-400">这天还没排上点</li>}
+        {day.spots.length === 0 && <li className="text-sm text-gh-fg-faint">这天还没排上点</li>}
       </ul>
 
-      <div className="mt-3 border-t border-dashed border-gray-200 pt-3 text-sm">
+      <div className="mt-3 border-t border-dashed border-gh-border pt-3 text-sm">
         {/* 交通排在住宿前面：它发生在"到"之前，而且它是这份行程里**唯一**能直接回答
             "这段路孩子受不受得了"的一行。 */}
         {day.transfer && <TransferLine transfer={day.transfer} />}
@@ -671,14 +691,14 @@ function DayCard({
         ))}
 
         {day.hotel ? (
-          <p className="text-gray-700">
+          <p className="text-gh-fg">
             🏨 {day.hotel.name}
-            <span className="ml-2 text-gray-500">
+            <span className="ml-2 text-gh-fg-muted">
               {/* 酒店这里是**每晚房价**，和上面的门票不是一个量纲 */}
               {day.hotel.priceYuan === null ? '房价未知' : `¥${day.hotel.priceYuan}/晚`}
             </span>
-            {day.hotel.star && <span className="ml-2 text-gray-400">{day.hotel.star}</span>}
-            {stay?.label && <span className="ml-2 text-gray-400">{stay.label}</span>}
+            {day.hotel.star && <span className="ml-2 text-gh-fg-faint">{day.hotel.star}</span>}
+            {stay?.label && <span className="ml-2 text-gh-fg-faint">{stay.label}</span>}
             {/* 订房入口。⚠️ 在 2026-10-14 之前这里**什么都没有** ——
                 hotel.bookUrl 后端一直在发，前端一个字都没渲染，也就是说
                 整份行程里唯一能直接把用户带到酒店的那条路，一直是断的。
@@ -690,7 +710,7 @@ function DayCard({
                 href={day.hotel.bookUrl}
                 target="_blank"
                 rel="noreferrer"
-                className="ml-2 text-emerald-700 underline hover:text-emerald-900"
+                className="ml-2 text-gh-accent hover:underline"
               >
                 去飞猪订
               </a>
@@ -701,11 +721,11 @@ function DayCard({
            *    最后一天 → 当天返程（正常，不用多说）
            *    其它天   → 这次没查到酒店数据（异常，要说出来，否则用户以为系统忘了）
            *  写成一个统一的"无住宿"会让前者显得像故障、后者显得像安排。 */
-          <p className="text-gray-400">
+          <p className="text-gh-fg-faint">
             {isLast ? '当天返程，不需要住宿' : '这天还没有住宿安排'}
           </p>
         )}
-        {day.hotel?.tips && <p className="mt-1 text-xs text-gray-500">{day.hotel.tips}</p>}
+        {day.hotel?.tips && <p className="mt-1 text-xs text-gh-fg-muted">{day.hotel.tips}</p>}
 
         {/* ── 今晚还能住哪儿 ───────────────────────────────────────────────
             排在主选下面：它和主选回答的是同一个问题（今晚住哪），只是另一个答案。
@@ -770,22 +790,22 @@ function SpotRow({
   return (
     <li className="text-sm">
       <div className="flex gap-3">
-        <span className="w-12 shrink-0 text-gray-400">{spot.time}</span>
+        <span className="w-12 shrink-0 text-gh-fg-faint">{spot.time}</span>
         <span className="flex-1">
-          <span className="text-gray-900">{spot.name}</span>
+          <span className="text-gh-fg">{spot.name}</span>
           {/* ⚠️ priceYuan 为 null 是"没有可售的票"，不是"免费" —— 所以写"票价未知" */}
-          <span className="ml-2 text-gray-500">
+          <span className="ml-2 text-gh-fg-muted">
             {spot.priceYuan === null ? '票价未知' : `¥${spot.priceYuan}`}
           </span>
           {swapped && (
-            <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-xs text-blue-700">
+            <span className="ml-2 rounded-full bg-gh-accent-soft px-2 py-0.5 text-xs text-gh-accent">
               换上的备选
             </span>
           )}
           {spot.tips ? (
-            <span className="mt-1 block text-xs text-gray-500">{spot.tips}</span>
+            <span className="mt-1 block text-xs text-gh-fg-muted">{spot.tips}</span>
           ) : swapped ? (
-            <span className="mt-1 block text-xs text-gray-400">
+            <span className="mt-1 block text-xs text-gh-fg-faint">
               换上的备选没有游玩建议 —— 原来那句是按上一个点写的，留着会误导
             </span>
           ) : null}
@@ -797,7 +817,7 @@ function SpotRow({
           type="button"
           onClick={() => setOpen((v) => !v)}
           disabled={alternatives.length === 0}
-          className="rounded border border-gray-300 px-2 py-0.5 text-gray-600 hover:border-gray-400 hover:text-gray-900 disabled:border-gray-200 disabled:text-gray-300"
+          className="rounded-md border border-gh-border bg-gh-canvas px-2 py-0.5 text-gh-fg hover:bg-[#eff2f5] disabled:opacity-50"
         >
           {alternatives.length === 0
             ? '没有别的可选了'
@@ -807,7 +827,7 @@ function SpotRow({
           <button
             type="button"
             onClick={onRestore}
-            className="text-gray-400 underline-offset-2 hover:text-gray-700 hover:underline"
+            className="text-gh-fg-faint underline-offset-2 hover:text-gh-fg hover:underline"
           >
             恢复原样
           </button>
@@ -816,11 +836,11 @@ function SpotRow({
 
       {open && alternatives.length > 0 && (
         <div className="mt-2 pl-[60px]">
-          <p className="mb-1 text-xs text-gray-400">
+          <p className="mb-1 text-xs text-gh-fg-faint">
             这次查到、还没用上的景点，按离这一天其它点的远近排的 ——
             <span className="font-medium">换完不会重新校验行程</span>，所以别选太远的
           </p>
-          <ul className="max-h-60 space-y-0.5 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-1.5">
+          <ul className="max-h-60 space-y-0.5 overflow-y-auto rounded-lg border border-gh-border bg-gh-canvas p-1.5">
             {alternatives.map((a) => (
               <li key={a.option.poiId}>
                 <button
@@ -831,12 +851,12 @@ function SpotRow({
                   }}
                   className="w-full rounded px-2 py-1 text-left text-xs hover:bg-white"
                 >
-                  <span className="text-gray-900">{a.option.name}</span>
-                  <span className="ml-2 text-gray-500">
+                  <span className="text-gh-fg">{a.option.name}</span>
+                  <span className="ml-2 text-gh-fg-muted">
                     {a.option.priceYuan === null ? '票价未知' : `¥${a.option.priceYuan}`}
                   </span>
-                  {a.option.category && <span className="ml-2 text-gray-400">{a.option.category}</span>}
-                  {a.km !== null && <span className="ml-2 text-gray-400">{formatKm(a.km)}</span>}
+                  {a.option.category && <span className="ml-2 text-gh-fg-faint">{a.option.category}</span>}
+                  {a.km !== null && <span className="ml-2 text-gh-fg-faint">{formatKm(a.km)}</span>}
                 </button>
               </li>
             ))}
@@ -954,31 +974,31 @@ function formatKm(km: number): string {
 function TransferLine({ transfer: t }: { transfer: Transfer }) {
   const flight = t.mode === 'FLIGHT'
   return (
-    <div className="mb-2 text-gray-700">
+    <div className="mb-2 text-gh-fg">
       <p>
         <span className="mr-1">{flight ? '✈️' : '🚄'}</span>
         <span className="font-medium">
           {hhmm(t.depDateTime)} {t.depStation}
         </span>
-        <span className="mx-1 text-gray-400">→</span>
+        <span className="mx-1 text-gh-fg-faint">→</span>
         <span className="font-medium">
           {hhmm(t.arrDateTime)} {t.arrStation}
         </span>
-        {t.serviceNo && <span className="ml-2 text-gray-500">{t.serviceNo}</span>}
+        {t.serviceNo && <span className="ml-2 text-gh-fg-muted">{t.serviceNo}</span>}
         {/* 耗时是这一行的重点，加粗一档，因为"几个小时"本身就是产品约束 */}
         {t.durationMinutes !== null && (
-          <span className="ml-2 font-medium text-gray-900">{formatDuration(t.durationMinutes)}</span>
+          <span className="ml-2 font-medium text-gh-fg">{formatDuration(t.durationMinutes)}</span>
         )}
         {/* ⚠️ null 是"飞猪没给价"，不是免费 —— 和门票、房价用的是同一条文案规矩 */}
-        <span className="ml-2 text-gray-500">
+        <span className="ml-2 text-gh-fg-muted">
           {t.priceYuan === null ? '票价未知' : `¥${t.priceYuan}`}
         </span>
-        {t.seatClass && <span className="ml-1 text-gray-400">{t.seatClass}</span>}
+        {t.seatClass && <span className="ml-1 text-gh-fg-faint">{t.seatClass}</span>}
       </p>
       {(!t.direct || t.transferCity || t.jumpUrl) && (
         <p className="mt-1 flex items-center gap-2 text-xs">
           {(!t.direct || t.transferCity) && (
-            <span className="rounded bg-amber-100 px-1.5 py-0.5 text-amber-900">
+            <span className="rounded-full bg-[#fff8c5] px-2 py-0.5 text-[#9a6700]">
               需在{t.transferCity ?? '中途'}换乘
             </span>
           )}
@@ -987,7 +1007,7 @@ function TransferLine({ transfer: t }: { transfer: Transfer }) {
               href={t.jumpUrl}
               target="_blank"
               rel="noreferrer"
-              className="text-gray-500 hover:text-gray-800"
+              className="text-gh-accent hover:underline"
             >
               {flight ? '去飞猪看这班航班' : '去飞猪看这趟车'}
             </a>
@@ -1020,16 +1040,16 @@ function TransferLine({ transfer: t }: { transfer: Transfer }) {
 function AlternativeLine({ transfer: t }: { transfer: Transfer }) {
   const flight = t.mode === 'FLIGHT'
   return (
-    <div className="mb-2 text-gray-500">
+    <div className="mb-2 text-gh-fg-muted">
       <p className="flex flex-wrap items-baseline gap-x-2">
-        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-800">
+        <span className="rounded-full bg-gh-accent-soft px-2 py-0.5 text-xs text-gh-accent">
           {flight ? '也可以飞' : '也可以坐'}
         </span>
         <span className="mr-0.5">{flight ? '✈️' : '🚄'}</span>
         <span>
           {hhmm(t.depDateTime)} {t.depStation}
         </span>
-        <span className="text-gray-400">→</span>
+        <span className="text-gh-fg-faint">→</span>
         <span>
           {hhmm(t.arrDateTime)} {t.arrStation}
         </span>
@@ -1048,13 +1068,13 @@ function AlternativeLine({ transfer: t }: { transfer: Transfer }) {
             href={t.jumpUrl}
             target="_blank"
             rel="noreferrer"
-            className="text-gray-400 underline hover:text-gray-700"
+            className="text-gh-fg-faint hover:text-gh-accent"
           >
             {flight ? '查这个航班' : '看这趟车'}
           </a>
         )}
       </p>
-      <p className="mt-0.5 text-xs text-gray-400">
+      <p className="mt-0.5 text-xs text-gh-fg-faint">
         这是另一个走法，要不要选由你定；票价是查询当时的，机票会浮动。当天的时间安排按上面那一趟排的。
       </p>
     </div>
@@ -1083,30 +1103,30 @@ function AlternativeLine({ transfer: t }: { transfer: Transfer }) {
  */
 function HotelAlternativeLine({ hotel: h }: { hotel: HotelStay }) {
   return (
-    <div className="mb-2 text-gray-500">
+    <div className="mb-2 text-gh-fg-muted">
       <p className="flex flex-wrap items-baseline gap-x-2">
-        <span className="rounded bg-amber-50 px-1.5 py-0.5 text-xs text-amber-800">
+        <span className="rounded-full bg-gh-accent-soft px-2 py-0.5 text-xs text-gh-accent">
           也可以住
         </span>
         <span className="mr-0.5">🏨</span>
         <span>{h.name}</span>
-        <span className="text-gray-400">
+        <span className="text-gh-fg-faint">
           {/* 每晚房价 —— 和主选同一个量纲，也和上面的门票不是一个量纲 */}
           {h.priceYuan === null ? '房价未知' : `¥${h.priceYuan}/晚`}
         </span>
-        {h.star && <span className="text-gray-400">{h.star}</span>}
+        {h.star && <span className="text-gh-fg-faint">{h.star}</span>}
         {h.bookUrl && (
           <a
             href={h.bookUrl}
             target="_blank"
             rel="noreferrer"
-            className="text-gray-400 underline hover:text-gray-700"
+            className="text-gh-fg-faint hover:text-gh-accent"
           >
             去飞猪订
           </a>
         )}
       </p>
-      {h.address && <p className="mt-0.5 text-xs text-gray-400">{h.address}</p>}
+      {h.address && <p className="mt-0.5 text-xs text-gh-fg-faint">{h.address}</p>}
     </div>
   )
 }
