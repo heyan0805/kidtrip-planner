@@ -6,6 +6,7 @@ import com.hellen.kidtrip.retrieval.TransportMode;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -176,5 +177,56 @@ class PlanServiceFlightTest {
     void onlyPrimaryCountsAsHavingALeg() {
         assertTrue(new Legs(new Legs.Options(plane(125), List.of()), Legs.Options.empty()).hasAny());
         assertFalse(new Legs(Legs.Options.empty(), Legs.Options.empty()).hasAny());
+    }
+
+    /* ============================================================
+     * ④ 查了但没给出结果的那一句话（2026-10-17）
+     * ============================================================ */
+
+    /**
+     * 这一组的来历：深圳→上海的实测里去程航班被上游拒绝（PARAM）、回程查到了，
+     * 用户看着"回程有'也可以飞'、去程没有"追问"为什么去程没给飞机信息" ——
+     * 沉默被读成了"去程没有飞机"。这几条钉住"什么情况下说、说什么"，
+     * 防止将来这句话被当成噪音随手删掉。
+     */
+
+    @Test
+    @DisplayName("⭐ 上游拒绝（UPSTREAM_ERROR）→ 说'这次没查成'，且必须说清'不代表没有'")
+    void upstreamErrorGetsAHonestMissNotice() {
+        String notice = PlanService.flightMissNotice("出发地到目的地",
+                LocalDate.of(2026, 11, 29), failed());
+
+        assertTrue(notice.startsWith("出发地到目的地"), "告警必须能对上是哪一段路");
+        assertTrue(notice.contains("2026-11-29"), "必须带查的是哪一天");
+        assertTrue(notice.contains("没查成"), "核心信息是'这次没查到'");
+        assertTrue(notice.contains("不代表这条线没有合适的航班"),
+                "'不知道'必须如实交出去 —— 不能让失败读起来像'没有航班'的结论");
+        assertFalse(notice.contains("没有查到可用的"), "查询失败绝不能伪装成上游的结论");
+    }
+
+    @Test
+    @DisplayName("上游正常返回但零条目（NO_EDGE）→ 那是结论，直接说，不加'不代表'搅匀")
+    void noEdgeGetsAFactualNotice() {
+        String notice = PlanService.flightMissNotice("目的地回出发地",
+                LocalDate.of(2026, 12, 2), noEdge());
+
+        assertTrue(notice.contains("2026-12-02"));
+        assertTrue(notice.contains("没有查到直达走法"), "原样转述上游的结论");
+        assertFalse(notice.contains("不代表"),
+                "上游正常返回的'没有'是结论 —— 再补'不代表没有'就把结论搅回不确定");
+    }
+
+    @Test
+    @DisplayName("查到了（FOUND）→ 这里闭嘴（'也可以飞'由 warnFlightAlternative 负责，不能说两遍）")
+    void foundGetsNoMissNotice() {
+        assertNull(PlanService.flightMissNotice("出发地到目的地",
+                LocalDate.of(2026, 11, 17), found(plane(125), false)));
+    }
+
+    @Test
+    @DisplayName("压根没查（null）→ 沉默（没花那次调用，无事可报）")
+    void nullFlightGetsNoNotice() {
+        assertNull(PlanService.flightMissNotice("出发地到目的地",
+                LocalDate.of(2026, 11, 17), null));
     }
 }

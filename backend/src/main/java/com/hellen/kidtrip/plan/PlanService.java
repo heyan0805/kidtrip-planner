@@ -953,7 +953,44 @@ public class PlanService {
 
         Legs.Options options = optionsOf(train, flight);
         warnFlightAlternative(role, train, options, warnings);
+        String miss = flightMissNotice(role, date, flight);
+        if (miss != null) {
+            warnings.add(miss);
+        }
         return options;
+    }
+
+    /**
+     * 飞机"查了但没给出结果"的那一句话 —— 2026-10-17 加的，之前这里是沉默。
+     *
+     * 为什么沉默被打破了：深圳→上海的实测里，去程航班查询被上游拒绝（PARAM）、回程查到了，
+     * 于是用户看到"回程有'也可以飞'、去程什么都没有"，追了一句"为什么去程没给飞机信息？"——
+     * **沉默在"另一段有"的对照下会被读成结论**。界面上缺的那一行，用户会替我们填上
+     * "去程没有飞机"，而那是个我们根本没验证过的断言。
+     *
+     * 两种"没给出结果"要说的话**不一样**，混成一句就是把这个工程反复踩的错再踩一遍：
+     *   · UPSTREAM_ERROR（上游拒绝/超时）→ 我们**什么都不知道**。必须说"这次没查成"，
+     *     而且必须说清"不代表这条线没有合适的航班" —— 把"不知道"如实交出去；
+     *   · NO_EDGE（上游正常返回但零条目）→ 这是**上游给的结论**，可以直接说"没有查到可用的直达航班"，
+     *     不用加"不代表没有"（那反而把一个结论又搅回不确定）。
+     *
+     * 什么时候沉默（返回 null）：
+     *   · flight == null → 根本没花那次调用，无事可报；
+     *   · FOUND → 已经由 warnFlightAlternative 说话了，这里再说就是同一件事说两遍。
+     *
+     * 抽成 static 纯函数：这句话的用户价值有争议（它让 warnings 变长），必须有测试钉住
+     * "什么情况下说、说什么"，防止将来被当成噪音随手删掉。
+     */
+    static String flightMissNotice(String role, LocalDate date, LegService.Leg flight) {
+        if (flight == null) {
+            return null;
+        }
+        return switch (flight.outcome()) {
+            case UPSTREAM_ERROR -> role + "这段路顺带查了 " + date + " 这一天的航班，这次没查成（"
+                    + flight.detail() + "）—— 这只说明这次没查到，不代表这条线没有合适的航班";
+            case NO_EDGE -> role + "这段路顺带查了 " + date + " 这一天的航班：" + flight.detail();
+            default -> null;
+        };
     }
 
     /**
