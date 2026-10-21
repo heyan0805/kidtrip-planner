@@ -97,7 +97,7 @@ export default function TravelPlanner() {
 
         <div className="mt-6 grid gap-6 md:grid-cols-[1fr_320px]">
           {/* ── 左：对话区 ────────────────────────────────── */}
-          <section className="flex min-h-[520px] flex-col rounded-lg border border-gh-border bg-white shadow-sm">
+          <section className="ui-card flex min-h-[520px] flex-col">
             <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto p-4">
               {chat.messages.length === 0 && (
                 <p className="text-sm text-gh-fg-faint">
@@ -258,7 +258,7 @@ function ProfileCard({
   missing: Array<keyof TravelParams>
 }) {
   return (
-    <div className="rounded-lg border border-gh-border bg-white p-4 shadow-sm">
+    <div className="ui-card p-4">
       <h2 className="text-sm font-semibold text-gh-fg">已收集的信息</h2>
       <p className="mt-0.5 text-xs text-gh-fg-faint">这就是"上下文"里被提炼出来的那部分</p>
       {/* 时间轴：竖线画在 dl 上（before），每个字段一颗点 ——
@@ -350,13 +350,20 @@ function PersonaCard({ persona }: { persona: Persona }) {
   return (
     // 这张卡就是截图里那张 GitHub changelog 卡的同构：
     // 白卡 + 左侧竖线时间轴 + 「小灰字（维度）→ 深色标题（判断）→ 小灰字（你的原话）」
-    <div className="rounded-lg border border-gh-border bg-white p-4 shadow-sm">
+    //
+    // 2026-10-21：它是全页**唯一**一处"暖"的地方。
+    //   它讲的不是事实，是**推断** —— 而事实卡（行程、查询账本）一律冷白。
+    //   让底色替我们说话：暖的那块 = 它猜的，白的那块 = 它查到的。
+    // ⚠️ 暖色只许停在这张卡里。多铺一张就等于引入第二个主色，
+    //   那时"哪块更暖"就从信号变成了噪音（全站没有主次了）。
+    <div className="ui-card border-[#ecdfc6] bg-[#fffdf6] p-4">
       <h2 className="text-sm font-semibold text-gh-fg">我这样理解你</h2>
       <p className="mt-0.5 text-xs text-gh-fg-faint">从你的话里推出来的，每条都附你自己的原话</p>
-      <ul className="relative mt-3 space-y-3 before:absolute before:bottom-2 before:left-[3.5px] before:top-2 before:w-px before:bg-gh-border">
+      <ul className="relative mt-3 space-y-3 before:absolute before:bottom-2 before:left-[3.5px] before:top-2 before:w-px before:bg-[#e6d9bf]">
         {persona.inferences.map((it) => (
           <li key={it.key} className="relative pl-5">
-            <span className="absolute left-0 top-1 h-2 w-2 rounded-full bg-[#d4a72c] ring-4 ring-white" />
+            {/* ring 用同一块暖底，不能用白色 —— 否则每个圆点周围都挂一个白圈 */}
+            <span className="absolute left-0 top-1 h-2 w-2 rounded-full bg-[#d4a72c] ring-4 ring-[#fffdf6]" />
             <p className="text-xs leading-4 text-gh-fg-muted">{PERSONA_LABELS[it.key]}</p>
             <p className="mt-0.5 text-sm font-medium leading-snug text-gh-fg">{it.value}</p>
             {it.evidence && (
@@ -365,7 +372,7 @@ function PersonaCard({ persona }: { persona: Persona }) {
           </li>
         ))}
       </ul>
-      <p className="mt-3 border-t border-gh-border-muted pt-2.5 text-[11px] leading-snug text-gh-fg-faint">
+      <p className="mt-3 border-t border-[#ecdfc6] pt-2.5 text-[11px] leading-snug text-gh-fg-faint">
         推错了就直接说（比如「其实我们体力很好」），下一轮会更新。
       </p>
     </div>
@@ -412,7 +419,7 @@ function GeneratingPanel({ progress }: { progress: PlanProgress | null }) {
   const steps = progress?.steps ?? []
 
   return (
-    <div className="rounded-lg border border-gh-border bg-white p-3 shadow-sm">
+    <div className="ui-card p-3">
       <div className="flex items-baseline justify-between">
         <span className="text-xs font-medium text-gh-fg">正在生成行程</span>
         <span className="text-xs tabular-nums text-gh-fg-muted">
@@ -527,7 +534,7 @@ function PlanView({
 
   return (
     <section className="mt-6 space-y-4">
-      <div className="rounded-lg border border-gh-border bg-white p-4 shadow-sm">
+      <div className="ui-card p-4">
         <h2 className="text-base font-semibold text-gh-fg">{plan.summary}</h2>
         <p className="mt-2 text-xs text-gh-fg-muted">
           查了 {plan.provenance.searchRounds} 轮飞猪 · 命中 {plan.provenance.candidatesFound} 条 ·
@@ -576,7 +583,7 @@ function PlanView({
       </div>
 
       {/* 账本：真实发出去的查询命令。用户有权看见"这份东西是怎么来的" */}
-      <details className="rounded-lg border border-gh-border bg-white p-4 shadow-sm">
+      <details className="ui-card p-4">
         <summary className="cursor-pointer text-sm font-semibold text-gh-fg">
           这份行程是怎么来的（{plan.provenance.queries.length} 次查询）
         </summary>
@@ -636,7 +643,7 @@ function DayCard({
   onRestore: (day: number, index: number) => void
 }) {
   return (
-    <article className="rounded-lg border border-gh-border bg-white p-4 shadow-sm">
+    <article className="ui-card p-4">
       <h3 className="text-sm font-semibold text-gh-fg">
         第 {day.day} 天 · {day.theme}
       </h3>
@@ -663,7 +670,7 @@ function DayCard({
         {day.spots.length === 0 && <li className="text-sm text-gh-fg-faint">这天还没排上点</li>}
       </ul>
 
-      <div className="mt-3 border-t border-dashed border-gh-border pt-3 text-sm">
+      <div className="ui-divide mt-3 pt-3 text-sm">
         {/* 交通排在住宿前面：它发生在"到"之前，而且它是这份行程里**唯一**能直接回答
             "这段路孩子受不受得了"的一行。 */}
         {day.transfer && <TransferLine transfer={day.transfer} />}
@@ -790,7 +797,10 @@ function SpotRow({
   return (
     <li className="text-sm">
       <div className="flex gap-3">
-        <span className="w-12 shrink-0 text-gh-fg-faint">{spot.time}</span>
+        {/* 时间列：等宽 + 表格数字。比例字体里 "09:30" 比 "14:16" 窄一点，
+            一列时间扫下去就是波浪；tabular-nums 让每个数字占同一宽度，列才对得齐。
+            行高锁 leading-5（=右边点名的 text-sm 行高），否则时间会比名字高半行。 */}
+        <span className="ui-num w-12 shrink-0 text-[13px] leading-5 text-gh-fg-muted">{spot.time}</span>
         <span className="flex-1">
           <span className="text-gh-fg">{spot.name}</span>
           {/* ⚠️ priceYuan 为 null 是"没有可售的票"，不是"免费" —— 所以写"票价未知" */}
@@ -978,13 +988,13 @@ function TransferLine({ transfer: t }: { transfer: Transfer }) {
       <p>
         <span className="mr-1">{flight ? '✈️' : '🚄'}</span>
         <span className="font-medium">
-          {hhmm(t.depDateTime)} {t.depStation}
+          <span className="ui-num">{hhmm(t.depDateTime)}</span> {t.depStation}
         </span>
         <span className="mx-1 text-gh-fg-faint">→</span>
         <span className="font-medium">
-          {hhmm(t.arrDateTime)} {t.arrStation}
+          <span className="ui-num">{hhmm(t.arrDateTime)}</span> {t.arrStation}
         </span>
-        {t.serviceNo && <span className="ml-2 text-gh-fg-muted">{t.serviceNo}</span>}
+        {t.serviceNo && <span className="ui-num ml-2 text-gh-fg-muted">{t.serviceNo}</span>}
         {/* 耗时是这一行的重点，加粗一档，因为"几个小时"本身就是产品约束 */}
         {t.durationMinutes !== null && (
           <span className="ml-2 font-medium text-gh-fg">{formatDuration(t.durationMinutes)}</span>
@@ -1047,13 +1057,13 @@ function AlternativeLine({ transfer: t }: { transfer: Transfer }) {
         </span>
         <span className="mr-0.5">{flight ? '✈️' : '🚄'}</span>
         <span>
-          {hhmm(t.depDateTime)} {t.depStation}
+          <span className="ui-num">{hhmm(t.depDateTime)}</span> {t.depStation}
         </span>
         <span className="text-gh-fg-faint">→</span>
         <span>
-          {hhmm(t.arrDateTime)} {t.arrStation}
+          <span className="ui-num">{hhmm(t.arrDateTime)}</span> {t.arrStation}
         </span>
-        {t.serviceNo && <span>{t.serviceNo}</span>}
+        {t.serviceNo && <span className="ui-num">{t.serviceNo}</span>}
         {t.durationMinutes !== null && (
           <span>
             {/* ⚠️ 飞机的这个是**纯飞行时间**，不含提前到机场和进城 —— 后端在 warnings 里
