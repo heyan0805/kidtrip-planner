@@ -649,7 +649,14 @@ function DayCard({
   // 不接 Unsplash/Places 那类图库：会配错图（把别的景点安在这天头上，
   // 比没图更糟）、有限流、还让首屏多一个外网依赖。
   // ⚠️ find 条件是 truthy：后端没图时发的是**空串**，不是"一张坏图"。
-  const cover = day.spots.find((s) => s.imageUrl)?.imageUrl
+  //
+  // 存整条 spot 而不是只存 url：点开放大时要显示"这是哪个景点"，
+  // 只留一个 url 的话，那行说明就只能写成"第 2 天的图"——等于没说。
+  const coverSpot = day.spots.find((s) => s.imageUrl)
+  // 36px 的缩略图看不清是什么地方（真实图多是景区门脸/远景），所以点开看大图。
+  const [zoomed, setZoomed] = useState(false)
+  // 图挂了就把这个入口关掉：留一个能点开、但点开是坏图的按钮，比没有更糟。
+  const [coverBroken, setCoverBroken] = useState(false)
 
   return (
     <article className="ui-card p-4">
@@ -657,28 +664,48 @@ function DayCard({
           而左边时间轴的圆点是按"36px 的头"定位的，行高一抖圆点就歪。
           锁死最小高度，有没有图圆点都在同一个位置。 */}
       <h3 className="flex min-h-9 items-center gap-2.5 text-sm font-semibold text-gh-fg">
-        {cover && (
-          /* 缩略图挂在外层 span 上而不是直接裸奔：
+        {coverSpot && (
+          /* 缩略图挂在外层按钮上而不是直接裸奔：
              图片 404 时把 img 藏掉（visibility，不是 display——
              外框尺寸不变，下面那个时间轴圆点是对着这个 36px 的头定位的，
-             布局一抖圆点就歪）。挂了的样子 = 一个浅灰空块，不顶歪任何东西。 */
-          <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded border border-gh-border bg-gh-canvas">
+             布局一抖圆点就歪）。挂了的样子 = 一个浅灰空块，不顶歪任何东西。
+
+             用 button 而不是给 span 挂 onClick：键盘能 Tab 到、回车能打开，
+             且读屏会念出 aria-label —— 这三件事挂 onClick 的 div 全都没有。 */
+          <button
+            type="button"
+            onClick={() => setZoomed(true)}
+            disabled={coverBroken}
+            aria-label={`放大查看「${coverSpot.name}」的图片`}
+            title={coverBroken ? '这张图没加载出来' : '点开看大图'}
+            className="flex h-9 w-9 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded border border-gh-border bg-gh-canvas transition-opacity hover:opacity-80 disabled:cursor-default disabled:hover:opacity-100"
+          >
             <img
-              src={cover}
+              src={coverSpot.imageUrl}
               alt=""
               loading="lazy"
               referrerPolicy="no-referrer"
-              className="h-full w-full object-cover"
-              onError={(e) => {
-                e.currentTarget.style.visibility = 'hidden'
-              }}
+              className={coverBroken ? 'invisible h-full w-full' : 'h-full w-full object-cover'}
+              onError={() => setCoverBroken(true)}
             />
-          </span>
+          </button>
         )}
         <span>
           第 {day.day} 天 · {day.theme}
         </span>
       </h3>
+
+      {/* 放大层。挂在卡片里而不是提到页面顶层：
+          它是 fixed 定位，挂在哪都不影响位置；留在卡片里反而让它
+          "服务于这一天的图"这层关系在代码里也是看得见的。 */}
+      {zoomed && coverSpot && (
+        <ImageZoom
+          src={coverSpot.imageUrl}
+          spotName={coverSpot.name}
+          dayLabel={`第 ${day.day} 天 · ${day.theme}`}
+          onClose={() => setZoomed(false)}
+        />
+      )}
 
       {/* 为什么这么排（2026-10-15 加）。一句话模板拼的话：里面的数字（今天几个点
           相隔多远、中午留了多长、几点到站）全部来自后端本地算出的事实 ——
@@ -783,6 +810,94 @@ function DayCard({
           ))}
       </div>
     </article>
+  )
+}
+
+/**
+ * 点开看大图。
+ *
+ * ── 为什么值得一个遮罩层 ─────────────────────────────────────────
+ *   36px 的缩略图能回答"这天有图"，回答不了"这是哪儿、值不值得去" ——
+ *   而家长扫一份行程时，下一个动作往往恰好就是这个。
+ *
+ * ── 三个刻意的取舍 ────────────────────────────────────────────────
+ * ① **只做"看"，不做画廊。** 没有左右切换、没有轮播。
+ *    这一层的职责只有"把当前这一张放大"；想看别的天，关掉再点下一天的缩略图。
+ *    为一个两秒钟的动作造一套键盘导航/循环索引，是给自己找 bug。
+ * ② **关闭路径给三条**：点空白、点右上角 ×、按 Esc。
+ *    遮罩层最恼人的失效就是"点哪儿都不关"，三条里缺一条都够用户骂一次。
+ * ③ **打开时锁住页面滚动。** 不锁的话滚轮还在滚身后那份行程，
+ *    看起来就是"卡住了"（而它其实好好地开着）。
+ *    解锁必须还原**原来的**值，不是一律写回 ''：这层以后可能叠在别的锁里。
+ *
+ * ⚠️ 图片本身被点时不关（stopPropagation）：很多人会先点一下图，想"再放大点"，
+ *    那一下把层关掉，会让人觉得点错了。
+ */
+function ImageZoom({
+  src,
+  spotName,
+  dayLabel,
+  onClose,
+}: {
+  src: string
+  spotName: string
+  dayLabel: string
+  onClose: () => void
+}) {
+  // 依赖里带 onClose：调用方每次渲染都会给一个新函数（内联箭头），
+  // 于是这张遮罩打开期间每次父组件重渲染都会重挂一次监听。代价可以忽略
+  // （一次 remove + add），换来的是永远不会因为闭包拿到过期的 onClose。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      document.body.style.overflow = prevOverflow
+    }
+  }, [onClose])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={`${spotName} 的图片`}
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-[rgba(31,35,40,0.72)] p-4 sm:p-8"
+    >
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="关闭"
+        autoFocus
+        className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-[rgba(31,35,40,0.55)] text-xl leading-none text-white hover:bg-[rgba(31,35,40,0.85)]"
+      >
+        ×
+      </button>
+
+      <img
+        src={src}
+        alt={spotName}
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[78vh] max-w-[90vw] rounded-lg object-contain"
+      />
+
+      <p
+        onClick={(e) => e.stopPropagation()}
+        className="max-w-[90vw] text-center text-xs leading-relaxed text-white/85"
+      >
+        <span className="font-medium text-white">{spotName}</span>
+        <span className="ml-2 text-white/55">{dayLabel}</span>
+        {/* 图是飞猪的商品图，原图可能就只有一两百像素 —— 与其让用户怀疑
+            "是不是你们把图压坏了"，不如直说它本来就不大。 */}
+        <span className="mt-1 block text-white/45">
+          点空白处或按 Esc 关闭 · 图是飞猪的商品图，原图可能不清晰
+        </span>
+      </p>
+    </div>
   )
 }
 
