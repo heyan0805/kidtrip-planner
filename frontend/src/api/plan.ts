@@ -383,7 +383,16 @@ async function mockPlan(req: PlanGenerateRequest): Promise<TravelPlan> {
     category: '示例类别',
     priceYuan: 100,
     bookUrl: 'https://example.invalid/mock',
-    imageUrl: '',
+    // 缩略图用自包含的 data-URI 占位，不用外网图：
+    // mock 的存在意义是"断网那天也能演示"，引一张线上图就把它自己拆了。
+    // 借这个占位，降级路上「日期头缩略图」这条分支也照样被走到、被看到。
+    imageUrl:
+      'data:image/svg+xml;utf8,' +
+      encodeURIComponent(
+        '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72">' +
+          '<rect width="72" height="72" fill="#eaeef2"/>' +
+          '<text x="36" y="47" font-size="32" text-anchor="middle">🎡</text></svg>',
+      ),
     lat: null,
     lng: null,
   })

@@ -564,7 +564,9 @@ function PlanView({
       <div className="relative ml-2 space-y-4 pl-6 before:absolute before:bottom-6 before:left-[4.5px] before:top-6 before:w-px before:bg-gh-border">
         {days.map((d, i) => (
           <div key={d.day} className="relative">
-            <span className="absolute -left-6 top-5 z-10 h-2.5 w-2.5 rounded-full bg-gh-fg-faint ring-4 ring-gh-canvas" />
+            {/* 圆点对准日期头的中线：卡片 p-4(16px) + 36px 缩略图行 / 2 - 圆点半径(5px) = 29px。
+                B 手加了缩略图之后日期头从 20px 变 36px，top-5 是对旧行高算的 —— 不改圆点就漂到标题上方。 */}
+            <span className="absolute -left-6 top-[29px] z-10 h-2.5 w-2.5 rounded-full bg-gh-fg-faint ring-4 ring-gh-canvas" />
             <DayCard
               day={d}
               stay={stays.get(d.day)}
@@ -642,10 +644,40 @@ function DayCard({
   onSwap: (day: number, index: number, option: SpotOption) => void
   onRestore: (day: number, index: number) => void
 }) {
+  // 日期头缩略图：用当天**第一个点**的真图。
+  // 图源是飞猪 POI 自带的 imageUrl（后端一直在发，前端一直没用）——
+  // 不接 Unsplash/Places 那类图库：会配错图（把别的景点安在这天头上，
+  // 比没图更糟）、有限流、还让首屏多一个外网依赖。
+  // ⚠️ find 条件是 truthy：后端没图时发的是**空串**，不是"一张坏图"。
+  const cover = day.spots.find((s) => s.imageUrl)?.imageUrl
+
   return (
     <article className="ui-card p-4">
-      <h3 className="text-sm font-semibold text-gh-fg">
-        第 {day.day} 天 · {day.theme}
+      {/* min-h-9：有的天没图（后端给空串），标题会缩回一行高 ——
+          而左边时间轴的圆点是按"36px 的头"定位的，行高一抖圆点就歪。
+          锁死最小高度，有没有图圆点都在同一个位置。 */}
+      <h3 className="flex min-h-9 items-center gap-2.5 text-sm font-semibold text-gh-fg">
+        {cover && (
+          /* 缩略图挂在外层 span 上而不是直接裸奔：
+             图片 404 时把 img 藏掉（visibility，不是 display——
+             外框尺寸不变，下面那个时间轴圆点是对着这个 36px 的头定位的，
+             布局一抖圆点就歪）。挂了的样子 = 一个浅灰空块，不顶歪任何东西。 */
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center overflow-hidden rounded border border-gh-border bg-gh-canvas">
+            <img
+              src={cover}
+              alt=""
+              loading="lazy"
+              referrerPolicy="no-referrer"
+              className="h-full w-full object-cover"
+              onError={(e) => {
+                e.currentTarget.style.visibility = 'hidden'
+              }}
+            />
+          </span>
+        )}
+        <span>
+          第 {day.day} 天 · {day.theme}
+        </span>
       </h3>
 
       {/* 为什么这么排（2026-10-15 加）。一句话模板拼的话：里面的数字（今天几个点
