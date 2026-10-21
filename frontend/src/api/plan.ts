@@ -385,13 +385,15 @@ async function mockPlan(req: PlanGenerateRequest): Promise<TravelPlan> {
     bookUrl: 'https://example.invalid/mock',
     // 缩略图用自包含的 data-URI 占位，不用外网图：
     // mock 的存在意义是"断网那天也能演示"，引一张线上图就把它自己拆了。
-    // 借这个占位，降级路上「日期头缩略图」这条分支也照样被走到、被看到。
+    // 借这个占位，降级路上「日期头缩略图」和「放大层里翻图」两条分支也照样被走到。
+    // 图上印编号 n：每张不一样，"翻到下一张"这件事才**看得出来**
+    //（全都长一样的话，切换生效了也像没生效）。
     imageUrl:
       'data:image/svg+xml;utf8,' +
       encodeURIComponent(
-        '<svg xmlns="http://www.w3.org/2000/svg" width="72" height="72">' +
-          '<rect width="72" height="72" fill="#eaeef2"/>' +
-          '<text x="36" y="47" font-size="32" text-anchor="middle">🎡</text></svg>',
+        '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240">' +
+          '<rect width="240" height="240" fill="#eaeef2"/>' +
+          `<text x="120" y="152" font-size="104" text-anchor="middle" fill="#818b98">${n}</text></svg>`,
       ),
     lat: null,
     lng: null,
@@ -414,6 +416,23 @@ async function mockPlan(req: PlanGenerateRequest): Promise<TravelPlan> {
           ...mockSpot(i + 1),
           tips: '这条是假数据，用来在没起后端时把界面跑起来',
         },
+        // 第二个点：现实里一天排 2~3 个景点是常态，而"同一天有多张图可以翻"
+        // 这条路径只有在**有两个点**的天上才走得到 —— 假数据里必须造出来，
+        // 否则降级模式永远验不到它，演示时也永远看不到它。
+        // 编号错开 100：备选池用的是 1..n，撞号会让「换一个」把自己当成候选。
+        //
+        // ⚠️ **最后一天刻意只给一个点**：那天 18:13 就返程了，下午排不下一个景点。
+        //    顺带它也是"只有一张图的那天"—— 放大层里"不摆点不动的箭头"那条分支
+        //    只有在这样的天上才走得到。
+        ...(i === days - 1
+          ? []
+          : [
+              {
+                time: '14:30',
+                ...mockSpot(i + 1 + 100),
+                tips: '（假数据）下午的第二个点',
+              },
+            ]),
       ],
       // 交通那一行照**真实形状**造假：第 1 天去程、最后一天回程、中间的日子没有城际移动。
       // 为什么假数据也要还原这个形状：界面上"这天没有交通"和"交通信息缺失"是两个分支，

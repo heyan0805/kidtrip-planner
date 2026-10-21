@@ -648,11 +648,16 @@ function DayCard({
   // 图源是飞猪 POI 自带的 imageUrl（后端一直在发，前端一直没用）——
   // 不接 Unsplash/Places 那类图库：会配错图（把别的景点安在这天头上，
   // 比没图更糟）、有限流、还让首屏多一个外网依赖。
-  // ⚠️ find 条件是 truthy：后端没图时发的是**空串**，不是"一张坏图"。
+  // ⚠️ filter 的条件是 truthy：后端没图时发的是**空串**，不是"一张坏图"。
   //
   // 存整条 spot 而不是只存 url：点开放大时要显示"这是哪个景点"，
   // 只留一个 url 的话，那行说明就只能写成"第 2 天的图"——等于没说。
-  const coverSpot = day.spots.find((s) => s.imageUrl)
+  //
+  // ⭐ 一整天的图都在这里（不是只有第一张）：一天常常排 2~3 个场景
+  //    （上午动物园、下午科技馆），每张图讲的都是不同的事。
+  //    日期头只挂第一张当封面，其余的在放大层里左右翻 —— 一次看一张。
+  const coverSpots = day.spots.filter((s) => s.imageUrl)
+  const coverSpot = coverSpots[0]
   // 36px 的缩略图看不清是什么地方（真实图多是景区门脸/远景），所以点开看大图。
   const [zoomed, setZoomed] = useState(false)
   // 图挂了就把这个入口关掉：留一个能点开、但点开是坏图的按钮，比没有更糟。
@@ -676,7 +681,11 @@ function DayCard({
             type="button"
             onClick={() => setZoomed(true)}
             disabled={coverBroken}
-            aria-label={`放大查看「${coverSpot.name}」的图片`}
+            aria-label={
+              coverSpots.length > 1
+                ? `放大查看这天的 ${coverSpots.length} 张图（从「${coverSpot.name}」开始）`
+                : `放大查看「${coverSpot.name}」的图片`
+            }
             title={coverBroken ? '这张图没加载出来' : '点开看大图'}
             className="flex h-9 w-9 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded border border-gh-border bg-gh-canvas transition-opacity hover:opacity-80 disabled:cursor-default disabled:hover:opacity-100"
           >
@@ -700,8 +709,8 @@ function DayCard({
           "服务于这一天的图"这层关系在代码里也是看得见的。 */}
       {zoomed && coverSpot && (
         <ImageZoom
-          src={coverSpot.imageUrl}
-          spotName={coverSpot.name}
+          // 一天的图全给它，第一张就是缩略图那张
+          items={coverSpots.map((s) => ({ src: s.imageUrl, name: s.name, time: s.time }))}
           dayLabel={`第 ${day.day} 天 · ${day.theme}`}
           onClose={() => setZoomed(false)}
         />
@@ -814,42 +823,54 @@ function DayCard({
 }
 
 /**
- * 点开看大图。
+ * 点开看大图 —— 一天有几张图，就能翻几张。
  *
  * ── 为什么值得一个遮罩层 ─────────────────────────────────────────
  *   36px 的缩略图能回答"这天有图"，回答不了"这是哪儿、值不值得去" ——
  *   而家长扫一份行程时，下一个动作往往恰好就是这个。
  *
- * ── 三个刻意的取舍 ────────────────────────────────────────────────
- * ① **只做"看"，不做画廊。** 没有左右切换、没有轮播。
- *    这一层的职责只有"把当前这一张放大"；想看别的天，关掉再点下一天的缩略图。
- *    为一个两秒钟的动作造一套键盘导航/循环索引，是给自己找 bug。
- * ② **关闭路径给三条**：点空白、点右上角 ×、按 Esc。
+ * ── 四个刻意的取舍 ────────────────────────────────────────────────
+ * ① **切换只在「这一天之内」，不跨天。**
+ *    一天 3 个场景是"同一件事的三个侧面"，翻着看是自然的；
+ *    跨天问的是另一个问题（"第 2 天和第三天哪边更好玩"），那属于重排布局，
+ *    不属于这一层。所以计数写的是 "2 / 3" —— **分母是这一天**，不是整趟行程。
+ * ② **只有一张时不给箭头、不给计数。** 摆着两个点不动的箭头，
+ *    正是那种"看起来能用其实是坏的"控件 —— 比没有更糟。
+ * ③ **关闭路径给三条**：点空白、点右上角 ×、按 Esc。
  *    遮罩层最恼人的失效就是"点哪儿都不关"，三条里缺一条都够用户骂一次。
- * ③ **打开时锁住页面滚动。** 不锁的话滚轮还在滚身后那份行程，
- *    看起来就是"卡住了"（而它其实好好地开着）。
- *    解锁必须还原**原来的**值，不是一律写回 ''：这层以后可能叠在别的锁里。
+ * ④ **打开时锁住页面滚动**，解锁还原原来的值（不是一律写回 ''）。
  *
  * ⚠️ 图片本身被点时不关（stopPropagation）：很多人会先点一下图，想"再放大点"，
- *    那一下把层关掉，会让人觉得点错了。
+ *    那一下把层关掉，会让人觉得点错了。箭头和说明文字同理。
+ *
+ * ⚠️ **循环翻**（到头接回第一张）：比"到边界按钮变灰"少一次"为什么点不动"，
+ *    而且这里没有"顺序"的语义要守 —— 一天的三张图不分首尾。
  */
 function ImageZoom({
-  src,
-  spotName,
+  items,
   dayLabel,
   onClose,
 }: {
-  src: string
-  spotName: string
+  /** 这一天的图，按当天行程顺序。第一张就是日期头缩略图那张 */
+  items: Array<{ src: string; name: string; time: string }>
   dayLabel: string
   onClose: () => void
 }) {
+  const [i, setI] = useState(0)
+  // 挂了的是**哪几张**（记下标），不是"当前这张是不是坏的"。
+  // 记下标的好处：翻回上一张时不用重置状态，也就不会闪一下空白。
+  const [broken, setBroken] = useState<number[]>([])
+  const count = items.length
+  const step = (d: number) => setI((v) => (v + d + count) % count)
+
   // 依赖里带 onClose：调用方每次渲染都会给一个新函数（内联箭头），
   // 于是这张遮罩打开期间每次父组件重渲染都会重挂一次监听。代价可以忽略
   // （一次 remove + add），换来的是永远不会因为闭包拿到过期的 onClose。
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose()
+      else if (e.key === 'ArrowRight') setI((v) => (v + 1) % count)
+      else if (e.key === 'ArrowLeft') setI((v) => (v - 1 + count) % count)
     }
     window.addEventListener('keydown', onKey)
     const prevOverflow = document.body.style.overflow
@@ -858,13 +879,21 @@ function ImageZoom({
       window.removeEventListener('keydown', onKey)
       document.body.style.overflow = prevOverflow
     }
-  }, [onClose])
+  }, [onClose, count])
+
+  // 一张图都没有的东西不该存在（调用方只在有图时才渲染这层）。
+  // 放在所有 hook 之后：条件 return 写在 hook 之前会让 hook 数量随渲染变化。
+  if (count === 0) return null
+  const cur = items[i]
+  const curBroken = broken.includes(i)
+  const arrowClass =
+    'absolute top-1/2 z-10 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full bg-[rgba(31,35,40,0.5)] text-2xl leading-none text-white hover:bg-[rgba(31,35,40,0.85)]'
 
   return (
     <div
       role="dialog"
       aria-modal="true"
-      aria-label={`${spotName} 的图片`}
+      aria-label={`${dayLabel} 的图片`}
       onClick={onClose}
       className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-3 bg-[rgba(31,35,40,0.72)] p-4 sm:p-8"
     >
@@ -873,28 +902,75 @@ function ImageZoom({
         onClick={onClose}
         aria-label="关闭"
         autoFocus
-        className="absolute right-4 top-4 flex h-9 w-9 items-center justify-center rounded-full bg-[rgba(31,35,40,0.55)] text-xl leading-none text-white hover:bg-[rgba(31,35,40,0.85)]"
+        className="absolute right-4 top-4 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-[rgba(31,35,40,0.55)] text-xl leading-none text-white hover:bg-[rgba(31,35,40,0.85)]"
       >
         ×
       </button>
 
-      <img
-        src={src}
-        alt={spotName}
-        onClick={(e) => e.stopPropagation()}
-        className="max-h-[78vh] max-w-[90vw] rounded-lg object-contain"
-      />
+      {count > 1 && (
+        <>
+          <button
+            type="button"
+            aria-label="上一张"
+            onClick={(e) => {
+              e.stopPropagation()
+              step(-1)
+            }}
+            className={`${arrowClass} left-2 sm:left-6`}
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            aria-label="下一张"
+            onClick={(e) => {
+              e.stopPropagation()
+              step(1)
+            }}
+            className={`${arrowClass} right-2 sm:right-6`}
+          >
+            ›
+          </button>
+        </>
+      )}
+
+      {curBroken ? (
+        /* 一张坏图不该给一个空白洞：说清它没加载出来，并提示可以翻下一张。
+           （这里的"坏"只影响这一张，不影响整层的其它图。） */
+        <div className="flex h-[40vh] w-[70vw] max-w-lg flex-col items-center justify-center gap-1 rounded-lg border border-white/20 text-sm text-white/70">
+          <span>这张图没加载出来</span>
+          {count > 1 && <span className="text-xs text-white/45">可以翻到下一张看</span>}
+        </div>
+      ) : (
+        <img
+          // key 用 src：换图时让 <img> 重新挂载。否则上一张的缩放/加载状态
+          // 会被复用，切过去一瞬间显示的还是旧图（同一毫秒内看不出来，但会闪）。
+          key={cur.src}
+          src={cur.src}
+          alt={cur.name}
+          onClick={(e) => e.stopPropagation()}
+          onError={() => setBroken((v) => (v.includes(i) ? v : [...v, i]))}
+          className="max-h-[78vh] max-w-[90vw] rounded-lg object-contain"
+        />
+      )}
 
       <p
         onClick={(e) => e.stopPropagation()}
         className="max-w-[90vw] text-center text-xs leading-relaxed text-white/85"
       >
-        <span className="font-medium text-white">{spotName}</span>
-        <span className="ml-2 text-white/55">{dayLabel}</span>
+        <span className="font-medium text-white">{cur.name}</span>
+        <span className="ui-num ml-2 text-white/55">{cur.time}</span>
+        <span className="ml-2 text-white/45">{dayLabel}</span>
+        {count > 1 && (
+          <span className="ui-num ml-2 rounded bg-white/15 px-1.5 py-0.5 text-white/85">
+            {i + 1} / {count}
+          </span>
+        )}
         {/* 图是飞猪的商品图，原图可能就只有一两百像素 —— 与其让用户怀疑
             "是不是你们把图压坏了"，不如直说它本来就不大。 */}
         <span className="mt-1 block text-white/45">
-          点空白处或按 Esc 关闭 · 图是飞猪的商品图，原图可能不清晰
+          {count > 1 ? '点空白处或按 Esc 关闭 · ← → 看同一天的另一张' : '点空白处或按 Esc 关闭'}
+          {' · 图是飞猪的商品图，原图可能不清晰'}
         </span>
       </p>
     </div>
