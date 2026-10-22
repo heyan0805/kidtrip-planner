@@ -51,7 +51,7 @@ npm run dev                 # → http://localhost:5173
 
 ```bash
 cd ../backend
-export DEEPSEEK_API_KEY=sk-xxxx        # Windows PowerShell: $env:DEEPSEEK_API_KEY="sk-xxxx"
+set -a; source ../deploy/kidtrip.env; set +a   # 大模型密钥与网关（真值文件，未入库）
 mvn spring-boot:run                    # → http://localhost:8003
 ```
 

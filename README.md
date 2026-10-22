@@ -2,7 +2,9 @@
 
 > **和 AI 聊几句，它去飞猪查真实的景点、酒店和城际车次，然后排出一份带娃真能跑得完的行程。**
 
-`React 19` · `TypeScript` · `Vite 8` · `Tailwind 3` ｜ `Spring Boot 4.1` · `Java 21` · `LangChain4j` · `DeepSeek`
+`React 19` · `TypeScript` · `Vite 8` · `Tailwind 3` ｜ `Spring Boot 4.1` · `Java 21` · `LangChain4j` · `通义千问（百炼）`
+
+> **在线体验：<http://114.132.233.6/>** —— 一次生成 30~60 秒（真的在查飞猪），建议先用「珠海 3 天，孩子 6 岁」试。
 
 ---
 
@@ -37,24 +39,40 @@
 | Java | 21 |
 | Maven | 3.9+ |
 | 飞猪 CLI | `npm i -g @fly-ai/flyai-cli`（黑客松提供的取数工具） |
-| DeepSeek | 一个 API Key |
+| 大模型 | 一个 OpenAI 兼容的 Chat API Key（本项目实测用**百炼 · 通义千问**） |
 
-### 两个环境变量（都必须配）
+### 环境变量（都必须配）
 
 ```bash
-export DEEPSEEK_API_KEY=sk-xxxx        # PowerShell: $env:DEEPSEEK_API_KEY="sk-xxxx"
+# ── 大模型：任何 OpenAI 兼容服务都能接，改 base-url 换厂商即可 ──
+export KIDTRIP_LLM_API_KEY=sk-xxxx
+export KIDTRIP_LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+export KIDTRIP_LLM_MODEL_NAME=qwen-plus
 
-# 飞猪 CLI 的 bundle 路径。不知道在哪就 `npm root -g`
+# ⚠️ 用千问 3.x 时必须显式关掉"思考"，否则非流式请求会被网关当空闲连接掐断。
+#    不是调优，是能不能用（原因见 backend/application.yaml 里那段注释）。
+export KIDTRIP_LLM_ENABLE_THINKING=false
+# 换不认这个字段的厂商（DeepSeek / OpenAI 官方）时：这一行整行删掉，不要写成 true
+
+# ── 飞猪 CLI 的 bundle 路径。不知道在哪就 `npm root -g` ──
 export FLYAI_CLI_PATH="$(npm root -g)/@fly-ai/flyai-cli/dist/flyai-bundle.cjs"
 # Windows: $env:FLYAI_CLI_PATH="$env:APPDATA\npm\node_modules\@fly-ai\flyai-cli\dist\flyai-bundle.cjs"
 ```
 
-⚠️ 这两个**故意都不留默认值**。写进仓库的密钥等于泄露；写进仓库的本机路径等于换台机器就跑不起来。少配一个，后端会在**启动时**就报一句人话，而不是等你点了"生成"才失败。
+⚠️ 这些**故意都不留默认值**。写进仓库的密钥等于泄露；写进仓库的本机路径等于换台机器就跑不起来。
+`KIDTRIP_LLM_API_KEY` 和 `FLYAI_CLI_PATH` 两个**必填**：少一个后端在**启动时**就报一句人话（"缺少配置 kidtrip.llm.api-key …"），
+而不是等你点了"生成"才失败。
+
+> **两种 Key 不要混**：百炼控制台直接申请的 key 走公网 `dashscope.aliyuncs.com`；
+> 而 `sk-ws-...` 这种**工作区密钥**只对专属网关 `https://ws-<id>.<region>.maas.aliyuncs.com/compatible-mode/v1` 有效，
+> 打到公网会返回 `401 invalid_api_key`。两者不能互换。
 
 ### 启动
 
 ```bash
-# 后端 → http://localhost:8003
+# 后端 → http://localhost:8003（先把上面那几个变量 export 好）
+# 想免去每次 export：把它们写进 deploy/kidtrip.env（本仓库把这个目录 gitignore 了），之后
+#   set -a; source deploy/kidtrip.env; set +a
 cd backend && mvn spring-boot:run
 
 # 前端 → http://localhost:5173（另开一个终端）
@@ -62,6 +80,9 @@ cd frontend && npm install && npm run dev
 ```
 
 打开 <http://localhost:5173/>，说一句「想带孩子去珠海玩 3 天，孩子 6 岁」。
+
+> **想部署到一台 Linux 服务器？** 见 `deploy/DEPLOY.md`（nginx + systemd + 环境变量清单，按零基础写的）。
+> 线上那台就是这么起来的：前端静态文件由 nginx 发，`/api` 反代到 `127.0.0.1:8003`，后端只监听回环地址。
 
 > **后端没起来也能看界面。** `VITE_USE_MOCK=true npm run dev` 会用假数据跑通全流程 ——
 > 界面上会有黄色横幅，且假行程的名字都带「（假数据）」。降级刻意做得很显眼：
@@ -82,7 +103,7 @@ cd frontend && npm install && npm run dev
   ├─ ① 对话层   ChatService · ChatComposer    从闲聊里抠出画像（城市/天数/年龄/偏好…）
   ├─ ② 检索层   RetrievalService · LegService 调飞猪 CLI 查景点 / 酒店 / 城际车次（带限流与缓存）
   ├─ ③ 规则层   RuleChecker · PlanRules       白名单筛选：时长、星级、距离、营业状态
-  ├─ ④ 编排层   PlanComposer（DeepSeek）      只能从候选里挑，产出逐天行程
+  ├─ ④ 编排层   PlanComposer（通义千问）      只能从候选里挑，产出逐天行程
   └─ ⑤ 校验层   PlanService.warnXxx           冲突兜底，写进 warnings 给人看
 ```
 
@@ -90,8 +111,11 @@ cd frontend && npm install && npm run dev
 
 | 方法 | 路径 | 请求 → 响应 data |
 |---|---|---|
-| POST | `/api/plan/chat` | `{ messages, currentParams }` → `{ reply, params }` |
-| POST | `/api/plan/generate` | `{ params }` → `{ summary, days[], warnings[], provenance, spotPool[] }` |
+| POST | `/api/plan/chat` | `{ messages, currentParams, currentPersona }` → `{ reply, params, persona }` |
+| POST | `/api/plan/generate` | `{ params, retrieval?, maxTicketPriceYuan?, persona }` → `{ summary, days[], warnings[], provenance, spotPool[] }`。带 `X-Run-Id` 请求头才记进度 |
+| GET | `/api/plan/progress/{runId}` | — → `{ steps[{key,label,state,tookMs}], elapsedMs, finished, ok }`（生成期间的真实分段耗时，见设计 7；未知 runId 回 `null` 而不是空进度） |
+
+`currentPersona` / `persona` 是**推论**、`params` 是**事实**，两者刻意分开存（见设计 10）；不传就是空，不影响调用。
 
 字段命名统一 camelCase，前后端**逐字一致** —— 写成 `child_age` 不会报错，只会永远是 `undefined`。
 
@@ -112,9 +136,9 @@ kidtrip-learn/
 ├─ frontend/                   React 19 · Vite 8（端口 5173）
 │  ├─ README.md                前端说明（怎么跑、怎么用、环境变量）
 │  ├─ ARCHITECTURE.md          前端代码结构、状态管理、数据流、读码顺序
-│  └─ src/                     9 个源文件 / 3032 行，零路由、零状态库
-├─ deploy/                     （本机专用，刻意未进仓库）Linux 上跑起来要的三份配置
-└─ _probe/                     40 支验证脚本（见下）
+│  └─ src/                     9 个源文件 / 3591 行，零路由、零状态库
+├─ deploy/                     （本机保留，未进仓库）Linux 上跑起来要的配置与部署单
+└─ _probe/                     42 支验证脚本（见下）
 ```
 
 ## 几个值得一看的设计
@@ -193,7 +217,7 @@ const days = applySwaps(plan.days, swaps)
 
 ### 6. 探针：怎么证明验证本身没在自欺欺人
 
-`_probe/` 下 40 支脚本，是"怎么验收一个 LLM 应用"的完整记录。核心不是"跑通了"，而是三件事：
+`_probe/` 下 42 支脚本，是"怎么验收一个 LLM 应用"的完整记录。核心不是"跑通了"，而是三件事：
 
 - **独立复算** —— 例如验距离标注：自己从飞猪原始缓存读坐标、自己算全部候选距离、自己取最近三个，再和日志里渲染出来的**逐个对**（编号 + 公里数）。只断言"日志里有 `近：C3(1.7km)`"是**形状验证**：一个乱序的、取最远三个的实现照样能过。
 - **双向对账** —— 有冲突必须有警告，**没冲突必须没有警告**。误报比漏报更可怕：警告一多，真问题就被淹了。
@@ -226,9 +250,10 @@ const days = applySwaps(plan.days, swaps)
   不参与任何判断、不进任何返回值。哪天有人让流程"根据进度做点别的"，这条线就断了 ——
   那时它不再是观测，而是会改变结果的东西。
 
-为什么不流式（SSE）？流式看起来更"正"，但这条产品要跑在**内网穿透**上，
-而 Cloudflare 免费隧道**不支持 SSE** —— 流式会在最要命的那一刻断掉。
-轮询在任何代理上都稳，代价只是进度最多晚 1 秒。
+为什么不流式（SSE）？最初是**部署环境决定的**：这条产品先要能跑在任意反向代理后面（当时的方案是内网穿透，
+而 Cloudflare 免费隧道不支持 SSE，流式会在最要命的那一刻断掉）。后来上了腾讯云轻量 + nginx，SSE 其实可行了，
+但仍然保留轮询 —— 它不依赖 `proxy_buffering` 之类的调参，换到任何托管平台上都不会因为一段配置而静默失效，
+代价只是进度最多晚 1 秒。
 
 ### 8. 一段路偏累的时候，把飞机也摆出来（但不说哪种更划算）
 
@@ -306,7 +331,7 @@ const days = applySwaps(plan.days, swaps)
 （`_probe/verify-hotel-api.mjs` 31 项盯着它：两档各查一次且都带入离日期、
 备选每天都有、**跨档**、按价格升序、不含主选、每家都有链接、独立复算名字/价格/档次词逐字相同。）
 
-### 10. persona：只记我们想清楚的 5 件事，而且每条都得拿得出原话
+### 10. persona：只记我们想清楚的 4 件事，而且每条都得拿得出原话
 
 起因是一句想法 —— **"之前的画像更像标签，主要是用来规则过滤的。能不能形成一个对这个人偏好的看法？"**
 
@@ -368,14 +393,18 @@ prompt 补一条（"说了相反方向也要记"）之后立刻变成 `walking =
 |---|---|
 | `frontend/README.md` | 前端：怎么跑、怎么用、命令、环境变量、目录速览 |
 | `frontend/ARCHITECTURE.md` | 前端代码：目录分层的依据、状态管理三个机制、一次生成的数据流、读码顺序、缺口清单 |
+| `backend/README.md` | 后端：接口契约、分层、配置项、测试清单、踩过的坑 |
+| `deploy/DEPLOY.md` | 部署：一台 Linux 从零到能访问（nginx / systemd / 环境变量 / 排障） |
+| `SUBMISSION.md` | 赛题说明：场景与用户、我做了什么、百炼（通义千问）使用说明 |
 | `_probe/*.mjs` | 验证脚本（`verify-*-api.mjs` 验后端、`verify-*-ui.mjs` 用真实浏览器验界面） |
 
 ## 已知限制
 
 - **不接第三方攻略。** 小红书之类的内容源**没有接入**，数据源就是飞猪。行程里的"游玩建议"是模型写的，景点/酒店/车次是飞猪的 —— 界面上这两类信息应当被区分看待。
+- **只收孩子年龄，不收大人数量。** 界面上的价格全部是**单价**（票价、房价），没有任何总价汇总，所以大人几个不影响输出；而"收了却不影响输出的字段"等于骗用户回答一个问题。带几个孩子会影响排程（数量 → 每天几个点、住几间房另算），所以只收年龄、并且按**最小的那个**算体力。
 - **没有持久化。** 行程不落库，刷新即失，也没有历史记录。
 - **上游有额度。** 飞猪接口实测会在连续调用时返回 429/451，所以检索层带间隔、缓存和预跑。演示前建议先跑 `_probe/prerun.mjs` 把结果落到磁盘。
-- **前端没有单元测试**（后端 369 个单测）。前端靠 `_probe/verify-*-ui.mjs` 在真实浏览器里验收。
+- **前端没有单元测试**（后端 378 个单测 / 26 个测试类）。前端靠 `_probe/verify-*-ui.mjs` 在真实浏览器里验收。
 - **机票只作参考，我们没有"哪种更划算"的判断**（见设计 8）：票价随日期飘的幅度比两种载体本身的差距还大，
   门到门时间也没算进去（提前到机场、落地进城）。界面上是把两种走法并排摆出来，选哪个由用户定。
 - **生成期间只有"步"可见，"步里面"还看不见。** 现在能看到走到哪一步了（见设计 7），

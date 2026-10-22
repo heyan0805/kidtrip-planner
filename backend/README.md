@@ -3,9 +3,9 @@
 「童行 · 带娃旅游规划器」的后端。**一句话职责：把"用户的模糊出行意愿"变成"一份可执行、可追溯的行程"**，
 中间所有的事实（景点、酒店、城际车次、经纬度）都来自飞猪，一格都不许模型自己编。
 
-- Spring Boot **4.1.1** · Java **21** · LangChain4j **1.18.1** · DeepSeek（`deepseek-chat`）
+- Spring Boot **4.1.1** · Java **21** · LangChain4j **1.18.1** · 通义千问（`qwen3.8-flash`，百炼 OpenAI 兼容网关）
 - 端口 **8003**（参照工程是 8002，两个可以同时跑）
-- 66 个源文件 / 9731 行 · 26 个测试类 / **369** 个用例
+- 66 个源文件 / 9934 行 · 26 个测试类 / **378** 个用例
 
 > 前端说明见 [`../frontend/README.md`](../frontend/README.md)；
 > 想先看整体架构和产品原则，读仓库根的 [`../README.md`](../README.md)。
@@ -58,29 +58,40 @@
 | Node.js | 后端会 `ProcessBuilder` 起 `node` 子进程去跑飞猪 CLI |
 | 飞猪 CLI | `npm i -g @fly-ai/flyai-cli`，装完用 `npm root -g` 找它的位置 |
 | 飞猪凭据 | `~/.flyai/config.json` 里要有 `FLYAI_API_KEY`，同目录还有 `device-id` |
-| DeepSeek Key | 自己去申请，配到环境变量里 |
+| 大模型 Key | 一个 OpenAI 兼容的 Chat API Key（本项目实测百炼 · 通义千问），配到环境变量里 |
 
 > ⚠️ **飞猪 CLI 需要凭据才能查**，凭据放在 `~/.flyai/config.json`（`FLYAI_API_KEY`），
 > 同目录还有一个 `device-id`。换机器 / 换容器部署时这两个要一起带过去 ——
 > 换一个全新的 `device-id` 会不会被上游风控拦下，**没验证过**。
 
-### 2.2 两个必须配的环境变量
+### 2.2 必须配的环境变量
 
-**没有默认值，且故意不留默认值**（写进仓库就等于泄露）：
+**都没有默认值，且故意不留默认值**（写进仓库就等于泄露）：
 
 ```bash
 # 飞猪 CLI 的 bundle 绝对路径（注意指向 dist/flyai-bundle.cjs，不是那个 flyai.cmd）
 # 找不到它：npm root -g
 export FLYAI_CLI_PATH="$(npm root -g)/@fly-ai/flyai-cli/dist/flyai-bundle.cjs"
 
-# DeepSeek 密钥
-export DEEPSEEK_API_KEY=sk-xxxxxxxx
+# 大模型（本项目实测用百炼 · 通义千问；任何 OpenAI 兼容服务都行，换个 base-url 就是换厂商）
+export KIDTRIP_LLM_API_KEY=sk-xxxxxxxx
+export KIDTRIP_LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+export KIDTRIP_LLM_MODEL_NAME=qwen-plus
+export KIDTRIP_LLM_ENABLE_THINKING=false   # 千问 3.x 必须；换不认该字段的厂商时整行删掉
 ```
 
-Windows（CMD）：`set FLYAI_CLI_PATH=...` / `set DEEPSEEK_API_KEY=sk-xxx`
+Windows（CMD）：`set FLYAI_CLI_PATH=...` / `set KIDTRIP_LLM_API_KEY=sk-xxx`
 
-两个都缺一不可：缺 `DEEPSEEK_API_KEY` **启动就失败**（不是用到才失败）——
-一个连模型都连不上的规划服务让它起来只会骗人。
+`api-key` 缺了 **启动就失败**（不是用到才失败）—— 一个连模型都连不上的规划服务让它起来只会骗人。
+
+> 本机开发可以直接用 `deploy/kidtrip.env`（真值版，`deploy/` 被 .gitignore 挡住，不会进仓库）：
+>
+> ```bash
+> set -a; source deploy/kidtrip.env; set +a
+> cd backend && mvn spring-boot:run
+> ```
+>
+> 模板见 `deploy/kidtrip.env.example`。
 
 ### 2.3 跑起来
 
@@ -479,9 +490,9 @@ prompt 里不给模型经纬度数字（让 LLM 比两串坐标是碰运气）�
 | `kidtrip.flyai.hotel-stars` | `"3;4"` | 酒店档次筛选。**分号分隔多个档位，每档查一次**（上游一次只回一档，多值不是并集）；逗号原样传给上游；空串 = 关掉（飞猪默认按价格升序，约等于把青旅排最前）。见第 6 节 ⑧ |
 | `kidtrip.flyai.max-leg-minutes` | `180` | 城际单段时长上限（带娃的核心约束，**没有"关掉"状态**）。火车是"上游粗筛 + 本地判"双保险，机票**只能本地判**（见第 6 节 ⑦） |
 | `kidtrip.flyai.cache-file` | `""` | 空 = 纯内存；填路径则落盘（演示前预跑用，**要同时调长 ttl**） |
-| `kidtrip.llm.api-key` | `${DEEPSEEK_API_KEY:}` | 缺了启动就失败 |
-| `kidtrip.llm.base-url` | `https://api.deepseek.com` | 兼容 OpenAI 协议，换 URL 即可换厂商 |
-| `kidtrip.llm.model-name` | `deepseek-chat` | |
+| `kidtrip.llm.api-key` | `${KIDTRIP_LLM_API_KEY:}` | 缺了启动就失败 |
+| `kidtrip.llm.base-url` | `${KIDTRIP_LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}` | 兼容 OpenAI 协议，换 URL 即可换厂商。⚠️ `sk-ws-` 工作区密钥只能打专属网关，打公网 401 |
+| `kidtrip.llm.model-name` | `${KIDTRIP_LLM_MODEL_NAME:qwen-plus}` | 线上实测用 `qwen3.8-flash` |
 | `kidtrip.llm.temperature` | `0.3` | 见第 5 节那个取舍 |
 | `kidtrip.llm.timeout-seconds` | `90` | 出 3 天行程 JSON 实测 10~30 秒 |
 | `kidtrip.llm.enable-thinking` | 不写 = 不发该字段 | **三态**：不写 / `true` / `false`。用通义千问 3.x 时必须写 `false`，否则全超时 —— 见第 6 节 ⑩ |
@@ -501,26 +512,26 @@ prompt 里不给模型经纬度数字（让 LLM 比两串坐标是碰运气）�
 
 ```bash
 cd backend
-mvn test          # 369 个用例
+mvn test          # 378 个用例
 mvn test -Dtest=LegServiceTest    # 单个类
 ```
 
-**369 / 369 全绿**，26 个测试类 / 6071 行（另有 1 个测试替身 `FakeChatModel`）。分布（用例数）：
+**378 / 378 全绿**，26 个测试类 / 6209 行（另有 1 个测试替身 `FakeChatModel`）。分布（用例数）：
 
 | 测试类 | 数量 | 护住什么 |
 |---|---|---|
 | `retrieval/LegServiceTest` | 38 | 城际班次挑选（火车 + 机票）：去程/回程时段窗口、**最快的首班车不能胜出**、超限仍然给车、跨午夜不算合格、机票不发时长筛选且只留直达 |
 | `llm/ChatComposerTest` | 28 | 画像抽取与合并；persona：**过闸门才透传**（编造依据整条丢弃且 reply 不受影响）、prompt 里有维度表和已有判断 |
 | `plan/PersonaGuardTest` | 24 | persona 闸门：**编造的 evidence 逐字回查后进不去**、assistant 自己说的不算依据、自造 key 进不去、太短的依据不算、被丢的那条**不会连坐**后面那条、真话必须进得去 |
-| `plan/PlanAssemblerTest` | 23 | 装配：编号回填、缺字段、顺序 |
+| `plan/PlanAssemblerTest` | 24 | 装配：编号回填、缺字段、顺序 |
 | `plan/DayReasonsTest` | 21 | 每天的理由：**方向防线**（"体力很好"的原话绝不能被引用成"排得轻松"的理由）、缺坐标整句不说（宁可不解释也不解释错）、数字来自本地事实、上限 2 句、连住/首末日的车次时刻 |
 | `plan/PlanServiceHotelAlternativeTest` | 18 | 住宿备选：**排除主选**、**跨档轮转**、价格升序、null 排最后、只挑酒店不混景点、每天都挂且排除当天主选 |
-| `plan/TravelParamsMergeTest` | 14 | 多轮对话里画像的增量合并 |
+| `plan/TravelParamsMergeTest` | 18 | 多轮对话里画像的增量合并；**`childAges` 是整体替换**（模型每轮输出全量，空数组/缺省不覆盖） |
 | `plan/PersonaMergeTest` | 14 | persona 合并：**同 key 覆盖、没提到的维度一律保留**、覆盖不挪位置、不可变 |
 | `retrieval/FlyaiCacheStoreTest` | 13 | 缓存：命中、过期、坏文件不拦启动 |
 | `plan/GenerationProgressTest` | 13 | 真实分步进度：耗时是真量的、失败时后面几步**不能**被标成已完成 |
 | `llm/RetrievalPlannerTest` | 12 | 检索条件规划 |
-| `plan/PlanServiceFlightTest` | 11 | 机票的**触发条件**（超限/无火车才查、在上限内不查、**查询失败不查**）与"谁当主选" |
+| `plan/PlanServiceFlightTest` | 15 | 机票的**触发条件**（超限/无火车才查、在上限内不查、**查询失败不查**）、"谁当主选"、以及**查不到票时的那句提示** |
 | `plan/PlanServiceLegConflictTest` | 11 | 首末日与班次的冲突判定 |
 | `plan/PlanServiceGeoConflictTest` | 11 | 距离兜底校验（双向：有冲突必有警告、无冲突必无警告） |
 | `plan/GeoTest` | 10 | 距离公式与边界（赤道 lat=0 不算缺值、缺坐标回 null 不是 0） |
@@ -550,10 +561,11 @@ persona 这一轮（两段）共做了六组注入（`PersonaGuard` 的逐字回
 **部署时这个后端比一般 Web 服务多几件麻烦事**，先说清楚免得踩空：
 
 1. **它要两个运行时**：JDK 21（跑 Jar）**和** Node.js（起子进程跑飞猪 CLI）。单一运行时镜像跑不起来。
-2. **要三份凭据**：`DEEPSEEK_API_KEY` + 飞猪 `FLYAI_API_KEY` + `~/.flyai/device-id`。后两个在
+2. **要三份凭据**：`KIDTRIP_LLM_API_KEY` + 飞猪 `FLYAI_API_KEY` + `~/.flyai/device-id`。后两个在
    `~/.flyai/` 下，不在仓库里（这是对的，但意味着部署要单独注入）。
-3. **新的 `device-id` 会不会被上游风控拦，未验证** —— 这是云部署最大的未知数。
-   实测的限流阈值（429 / 451）都是在本机这台设备上测的。
+3. **新的 `device-id` / 机房出口 IP 会不会被风控拦**：**已验证可用**（2026-10-21，腾讯云轻量
+   + 从本机拷过去的 `device-id`，实跑 `search-poi` 正常返回，`verify-ip-risk.mjs` 通过）。
+   但机房 IP 属于共享出口，风控是动态的 —— 演示当天仍建议用预跑缓存兜底。
 4. `max-leg-minutes` / `hotel-stars` 这类产品约束的取值都有实测依据，
    写在配置注释里了，改之前先读注释。
 

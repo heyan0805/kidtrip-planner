@@ -111,20 +111,37 @@ kidtrip:
     #    推荐：预跑和演示都用同一份配置（见 _probe/prerun.mjs 里写好的那组参数）。
     cache-file: ""
 
-  # ── B4 新增：大模型（DeepSeek）──────────────────────────────────
-  # DeepSeek 提供 OpenAI 兼容接口，所以 langchain4j 用 OpenAiChatModel 就能连，
-  # 换个 base-url 就能切到别的兼容厂商 —— 这也是选它的理由之一。
+  # ── B4 新增：大模型（OpenAI 兼容）──────────────────────────────
+  # 本项目用的是**百炼 · 通义千问**（qwen3.8-flash），但它接的是 OpenAI 兼容协议，
+  # 所以 langchain4j 用 OpenAiChatModel 就能连；换 base-url + 模型名即可换厂商
+  # （DeepSeek / 通义 / 自建 vLLM 都是这一条路）—— 这也是当初选它的理由。
   llm:
     # ⚠️ 密钥**只从环境变量注入**，这里故意不留默认值。
     #    为什么：写进仓库的密钥等于泄露（参照工程里那个 DeepSeek key 就是这么漏的，
     #    而且它还以 `:sk-...` 的形式躺在文件里，看着像"有默认值"，其实那就是泄露本身）。
-    #    怎么配：启动前 export DEEPSEEK_API_KEY=sk-xxxx（Windows: set DEEPSEEK_API_KEY=sk-xxxx）
+    #    怎么配：启动前 export KIDTRIP_LLM_API_KEY=sk-xxxx
     #    没配会怎样：**启动就失败**，报一句人话（见 LlmProperties）。
     #    我们选择"启动就报错"而不是"用到才报错"，因为一个连模型都连不上的规划服务，
     #    让它起来只会让人以为"跑起来了"，然后在点生成时才发现 —— 那是更差的失败方式。
-    api-key: ${DEEPSEEK_API_KEY:}
-    base-url: https://api.deepseek.com
-    model-name: deepseek-chat
+    #
+    # ⚠️ 两种 key 不要混：百炼控制台直接申请的 key 走公网 dashscope；
+    #    `sk-ws-...` 这种**工作区密钥**只对专属网关
+    #    （https://ws-<id>.<region>.maas.aliyuncs.com/compatible-mode/v1）有效，
+    #    打公网会 401 invalid_api_key。
+    api-key: ${KIDTRIP_LLM_API_KEY:}
+    base-url: ${KIDTRIP_LLM_BASE_URL:https://dashscope.aliyuncs.com/compatible-mode/v1}
+    model-name: ${KIDTRIP_LLM_MODEL_NAME:qwen-plus}
+    # ⚠️⚠️ 千问 3.x 系列**默认开着思考**，而思考 token 全是白等的时间：
+    #   实测（同一句请求、同一个 qwen3.8-flash）不关思考 9843 token（8866 是思考），
+    #   且非流式请求在思考期间线上零字节流动 → 网关当空闲连接在 ~30 秒掐掉，
+    #   客户端只看到 `IOException: EOF reached while reading`（现象是"全都超时"）。
+    #   关掉 → 519 token、11 秒。所以这项不是调优，是能不能用。
+    #
+    #   这是**三态**（见 LlmProperties.enableThinking）：
+    #     不写这一行 = 请求体里一个字节都不加（= 用厂商默认）
+    #     false      = 显式关掉思考（千问必须）
+    #   换 DeepSeek / OpenAI 官方这类不认该字段的厂商时，请把整行**删掉**，不要改成 true。
+    enable-thinking: ${KIDTRIP_LLM_ENABLE_THINKING:false}
     # 温度：这一步要的是"稳定的结构"，不是"创意"。
     # 0.3 —— 排期与文案允许一点变化，但 JSON 结构必须稳。
     #

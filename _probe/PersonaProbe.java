@@ -61,7 +61,9 @@ import java.util.List;
  *
  *   跑之前要 `mvn -o test-compile`（判定用 backend/target/classes 里的真类），
  *   并用 `mvn -o dependency:build-classpath -Dmdep.outputFile=_probe/cp.txt` 生成 cp.txt。
- *   环境变量：DEEPSEEK_API_KEY（必填）、DEEPSEEK_MODEL / DEEPSEEK_BASE_URL / PERSONA_TEMP、
+ *   环境变量：KIDTRIP_LLM_API_KEY（必填）/ KIDTRIP_LLM_BASE_URL / KIDTRIP_LLM_MODEL_NAME
+ *             （也认历史名字 DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL / DEEPSEEK_MODEL）、
+ *             PERSONA_THINKING=false（默认关思考，千问必须）、PERSONA_TEMP、
  *             PERSONA_ONLY=S1,S4（只跑指定场景，改 prompt 时省时间）。
  *
  *   ⚠️ 报告同时写 stdout 和 `_probe/out/persona-probe-<时间戳>.md`。
@@ -215,11 +217,29 @@ public class PersonaProbe {
      * 调模型
      * ══════════════════════════════════════════════════════════════ */
 
-    private static final String MODEL = env("DEEPSEEK_MODEL", "deepseek-chat");
-    private static final String BASE = env("DEEPSEEK_BASE_URL", "https://api.deepseek.com").replaceAll("/+$", "");
+    // 变量名先读本项目的 KIDTRIP_LLM_*，读不到再回退到历史名字 DEEPSEEK_*（这个探针最初给 DeepSeek 写的）。
+    // 换厂商只影响这几个值，判定逻辑一个字都不用动 —— 探针验的是"闸门在真模型上表现如何"，与厂商无关。
+    private static final String MODEL = env2("KIDTRIP_LLM_MODEL_NAME", "DEEPSEEK_MODEL", "qwen-plus");
+    private static final String BASE = stripV1(env2("KIDTRIP_LLM_BASE_URL", "DEEPSEEK_BASE_URL",
+            "https://dashscope.aliyuncs.com/compatible-mode/v1"));
     private static final double TEMPERATURE = Double.parseDouble(env("PERSONA_TEMP", "0.3"));
-    private static final String KEY = System.getenv("DEEPSEEK_API_KEY");
+    private static final String KEY = env2("KIDTRIP_LLM_API_KEY", "DEEPSEEK_API_KEY", null);
     private static final int TIMEOUT_SECONDS = Integer.parseInt(env("PERSONA_TIMEOUT", "120"));
+
+    /**
+     * 要不要让模型"思考"。
+     *
+     * <p>默认 **false**，因为千问 3.x 默认开着思考：思考期间链路上零字节流动，非流式请求会被
+     * 网关当空闲连接在 ~30 秒掐掉（现象是 {@code EOF reached while reading}）。这个探针是非流式，
+     * 所以必须显式关掉才跑得通。厂商不认这个字段时可以设 {@code PERSONA_THINKING=omit}。
+     */
+    private static final String THINKING = env("PERSONA_THINKING", "false");
+
+    /** 配置里的 base-url 带 {@code /v1}（{@code …/compatible-mode/v1}），而下面拼的是 {@code /v1/chat/completions}。 */
+    private static String stripV1(String url) {
+        String u = url.replaceAll("/+$", "");
+        return u.endsWith("/v1") ? u.substring(0, u.length() - 3) : u;
+    }
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final HttpClient HTTP = HttpClient.newBuilder()
@@ -231,6 +251,12 @@ public class PersonaProbe {
         return v == null || v.isBlank() ? fallback : v.strip();
     }
 
+    /** 先读主名字，再回退到历史名字。两个都没配就返回 fallback。 */
+    private static String env2(String primary, String legacy, String fallback) {
+        String v = env(primary, null);
+        return v != null ? v : env(legacy, fallback);
+    }
+
     /** 一次调用的结果。`error != null` = 调用失败；`error == null && parsed == null` = 返回了但解析不出数组 */
     private record Attempt(String raw, String error, long ms, String usage, List<Persona.Inference> parsed) {
     }
@@ -239,6 +265,7 @@ public class PersonaProbe {
         long t0 = System.currentTimeMillis();
         String body = "{\"model\":" + jsonString(MODEL)
                 + ",\"temperature\":" + TEMPERATURE
+                + ("omit".equalsIgnoreCase(THINKING) ? "" : ",\"enable_thinking\":" + Boolean.parseBoolean(THINKING))
                 + ",\"messages\":[{\"role\":\"user\",\"content\":" + jsonString(prompt) + "}]}";
         try {
             HttpRequest request = HttpRequest.newBuilder(URI.create(BASE + "/v1/chat/completions"))
@@ -386,7 +413,9 @@ public class PersonaProbe {
         out = new PrintStream(new FileOutputStream(FileDescriptor.out), true, StandardCharsets.UTF_8);
 
         if (KEY == null || KEY.isBlank()) {
-            System.err.println("缺 DEEPSEEK_API_KEY。用法：export DEEPSEEK_API_KEY=sk-xxxx && bash _probe/persona-probe.sh");
+            System.err.println("缺大模型密钥。用法："
+                    + "set -a; source deploy/kidtrip.env; set +a && bash _probe/persona-probe.sh"
+                    + "（或 export KIDTRIP_LLM_API_KEY=sk-xxxx）");
             System.exit(2);
         }
         String only = System.getenv("PERSONA_ONLY");
