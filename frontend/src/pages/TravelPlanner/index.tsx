@@ -92,7 +92,7 @@ export default function TravelPlanner() {
                   <path d="M13.8 20c.1-2.5 2-4.3 4.4-4.3.9 0 1.7.2 2.4.7-1 2.1-3 3.6-5.4 3.6z" opacity=".7" />
                 </svg>
               </span>
-              <h1 className="truncate text-xl font-semibold text-gh-fg">童行 · 带娃旅游规划器</h1>
+              <h1 className="truncate font-serif text-xl font-semibold text-gh-fg">童行 · 带娃旅游规划器</h1>
               {/* 徽标只声明身份（AI + 亲子），不声明能力等级 —— "专家""官方"这类词背不起 */}
               <span className="shrink-0 rounded-full bg-gh-accent-soft px-2 py-0.5 text-xs font-medium text-gh-accent">
                 AI 亲子版
@@ -142,7 +142,15 @@ export default function TravelPlanner() {
                 // 效果图顶部那枚小徽章不抄 —— 头部已有 logo + AI 亲子版徽标，再摆一个是重复。
                 <div className="flex h-full flex-col items-center justify-center gap-5 text-center">
                   <div>
-                    <p className="text-2xl font-semibold tracking-tight text-gh-fg">说说你的计划 ——</p>
+                    {/* 英文小眉标 + 衬线大标题：杂志的排版语言（编号、字距、衬线），
+                        借它三招就能把"工具"衬出"作品"感 —— 全站换衬线是另一个极端，
+                        界面的正文仍然是无衬线，衬线只出现在叙事的位置 */}
+                    <p className="text-[11px] font-medium uppercase tracking-[0.35em] text-gh-fg-faint">
+                      Family Trip · Real Data
+                    </p>
+                    <p className="mt-2 font-serif text-3xl font-semibold tracking-tight text-gh-fg">
+                      说说你的计划 ——
+                    </p>
                     <p className="mx-auto mt-2 max-w-md text-sm text-gh-fg-muted">
                       我会一轮轮把信息问清楚，再真的去查。
                       怕走路、要午睡、想避开人多这些细节都能直接说。
@@ -832,7 +840,9 @@ function DayCard({
           </button>
         )}
         <span>
-          第 {day.day} 天 · {day.theme}
+          {/* "第 N 天"用衬线：一页里最像"故事"的词就该长成故事的样子（编号叙事） */}
+          <span className="font-serif text-[15px]">第 {day.day} 天</span>
+          <span className="text-gh-fg-muted"> · {day.theme}</span>
         </span>
       </h3>
 

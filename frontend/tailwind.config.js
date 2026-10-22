@@ -23,6 +23,12 @@ export default {
         // 渐变只此一份，两颗按钮才像一家人
         'sage-gradient': 'linear-gradient(135deg, #85ab8b 0%, #4f8a68 100%)',
       },
+      fontFamily: {
+        // 衬线只给"叙事"用：品牌名、大字问候、每天的"第 N 天"。
+        // 排版语言学的：衬线=内容/杂志感，无衬线=界面/工具感 —— 一个页面两种字体分工，
+        // 比全站换衬线克制得多。Windows 兜底宋体，macOS/移动端有宋体-简。
+        serif: ['Georgia', '"Noto Serif SC"', '"Source Han Serif SC"', '"Songti SC"', 'STSong', 'SimSun', 'serif'],
+      },
       // 生成行程时的等待动画。只有两个，而且**没有一个表示"完成到百分之几"** ——
       // 五步的耗时完全不可预测（模型那两段在 10~30 秒之间浮动），
       // 画一条会走到头的进度条就是在编，理由见 src/types/plan.ts 里 PlanProgress 那段。
