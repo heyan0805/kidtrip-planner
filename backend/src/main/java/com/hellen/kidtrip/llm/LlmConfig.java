@@ -16,10 +16,10 @@ import java.time.Duration;
  *   我们要用的只有 4 个参数，写出来 8 行，值这点钱。
  *   （如果你以后要接 5 个模型、要按会话切模型，那时候再让 starter 接管也不迟。）
  *
- * 为什么用 OpenAiChatModel 连 DeepSeek：
- *   DeepSeek 提供的是 **OpenAI 兼容接口**（/v1/chat/completions），
- *   所以任何"OpenAI 客户端"只要改 base-url 和 api-key 就能用。
- *   这也意味着换成别的兼容厂商（月之暗面、通义、本地 vLLM…）只改配置、不改代码。
+ * 为什么用 OpenAiChatModel 连大模型：
+ *   本项目跑的是**百炼 · 通义千问**，它（以及 DeepSeek 等）提供的是 **OpenAI 兼容接口**
+ *   （/v1/chat/completions），所以任何"OpenAI 客户端"只要改 base-url 和 api-key 就能用。
+ *   这也意味着换成别的兼容厂商（月之暗面、DeepSeek、本地 vLLM…）只改配置、不改代码。
  */
 @Configuration
 public class LlmConfig {

@@ -70,15 +70,18 @@ public record LlmProperties(
             throw new IllegalStateException("""
                     缺少配置 kidtrip.llm.api-key（大模型密钥）。
                     请在启动前注入环境变量，例如：
-                      Windows(cmd):  set DEEPSEEK_API_KEY=sk-xxxx && mvn spring-boot:run
-                      bash/git-bash: export DEEPSEEK_API_KEY=sk-xxxx
+                      Windows(cmd):  set KIDTRIP_LLM_API_KEY=sk-xxxx && mvn spring-boot:run
+                      bash/git-bash: export KIDTRIP_LLM_API_KEY=sk-xxxx
+                    本项目还有两个配套变量（不配就用配置文件里的默认值）：
+                      KIDTRIP_LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+                      KIDTRIP_LLM_MODEL_NAME=qwen-plus
                     配置文件里写死密钥等于把密钥提交进仓库，所以这里故意不留默认值。""");
         }
         if (baseUrl == null || baseUrl.isBlank()) {
-            baseUrl = "https://api.deepseek.com";
+            baseUrl = "https://dashscope.aliyuncs.com/compatible-mode/v1";
         }
         if (modelName == null || modelName.isBlank()) {
-            modelName = "deepseek-chat";
+            modelName = "qwen-plus";
         }
         if (temperature == null || temperature < 0 || temperature > 2) {
             temperature = 0.3;
