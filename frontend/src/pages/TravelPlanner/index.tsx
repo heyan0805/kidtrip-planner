@@ -74,7 +74,7 @@ export default function TravelPlanner() {
   }
 
   return (
-    <div className="min-h-screen bg-gh-canvas">
+    <div className="min-h-screen bg-gradient-to-b from-[#f8f9fa] via-[#fbfcfb] to-[#f7f5ef]">
       <div className="mx-auto max-w-5xl px-4 py-8">
         <header>
           <div className="flex items-center justify-between">
@@ -118,7 +118,7 @@ export default function TravelPlanner() {
 
         {/* Mock 提示。必须显眼 —— 不提示等于把假数据当成真结果给用户 */}
         {chat.mockNotice && (
-          <div className="mt-4 rounded-lg border border-[#d4a72c66] bg-[#fff8c5] px-4 py-2 text-sm text-gh-fg">
+          <div className="mt-4 rounded-lg border border-[#d9a44159] bg-[#fdf5e6] px-4 py-2 text-sm text-gh-fg">
             ⚠️ {chat.mockNotice}
           </div>
         )}
@@ -163,7 +163,10 @@ export default function TravelPlanner() {
                           // 直接发、不走输入框：多一步"填进去"就多一次放弃的机会。
                           disabled={busy}
                           onClick={() => void chat.sendRound(ex.text)}
-                          className="rounded-full border border-gh-border bg-white px-3.5 py-2 text-[13px] text-gh-fg hover:border-gh-accent hover:bg-gh-accent-soft disabled:opacity-50"
+                          className={
+                            'rounded-full border px-3.5 py-2 text-[13px] text-gh-fg disabled:opacity-50 ' +
+                            ex.tone
+                          }
                         >
                           {/* icon 单独 span：探针按 [data-label] 抠文字，emoji 不掺进断言 */}
                           <span aria-hidden className="mr-1">{ex.icon}</span>
@@ -182,7 +185,7 @@ export default function TravelPlanner() {
                     className={
                       'inline-block max-w-[85%] whitespace-pre-wrap rounded-2xl border px-3 py-2 text-sm ' +
                       (m.role === 'user'
-                        ? 'border-[#b1d3f0] bg-gh-accent-soft text-gh-fg'
+                        ? 'border-[#c3d9c1] bg-gh-accent-soft text-gh-fg'
                         : 'border-gh-border-muted bg-gh-canvas text-gh-fg')
                     }
                   >
@@ -220,16 +223,16 @@ export default function TravelPlanner() {
                       : '说说你的计划，例如：想带俩娃去海边玩 3 天，不想太赶'
                   }
                   disabled={busy}
-                  className="flex-1 rounded-md border border-gh-border bg-white px-3 py-1.5 text-sm text-gh-fg outline-none focus:border-gh-accent focus:ring-2 focus:ring-[#0969da33] disabled:bg-gh-canvas"
+                  className="flex-1 rounded-md border border-gh-border bg-white px-3 py-1.5 text-sm text-gh-fg outline-none focus:border-gh-accent focus:ring-2 focus:ring-[#4e7d5f33] disabled:bg-gh-canvas"
                 />
                 <button
                   type="button"
                   onClick={() => void submit()}
                   // 忙碌时禁用，而不是"点了没反应" —— 闸门在 hook 里，这里要让它可见
                   disabled={busy || !draft.trim()}
-                  className="rounded-md bg-gh-green px-4 py-1.5 text-sm font-medium text-white hover:bg-gh-green-hover disabled:opacity-50"
-                >
-                  发送
+                className="rounded-md bg-sage-gradient px-4 py-1.5 text-sm font-medium text-white shadow-[0_1px_3px_rgba(79,138,104,0.35)] hover:brightness-95 disabled:opacity-50"
+              >
+                发送
                 </button>
               </div>
               {/* 一行小字换来少一次"打了字没反应"的困惑。放右下角，不跟占位符抢地方 */}
@@ -260,7 +263,7 @@ export default function TravelPlanner() {
                 type="button"
                 onClick={() => void chat.generate()}
                 disabled={!chat.canGenerate || busy}
-                className="w-full rounded-md bg-gh-green px-4 py-2 text-sm font-medium text-white shadow-md hover:bg-gh-green-hover disabled:opacity-50"
+                className="w-full rounded-md bg-sage-gradient px-4 py-2 text-sm font-medium text-white shadow-[0_1px_3px_rgba(79,138,104,0.35)] hover:brightness-95 disabled:opacity-50"
               >
                 {chat.generating ? '正在生成…' : '生成行程'}
               </button>
@@ -268,7 +271,7 @@ export default function TravelPlanner() {
                 // 点不了的时候必须说清**为什么**。一个灰着的按钮、不写原因，
                 // 用户只会以为界面坏了，而不是回去把信息补上 ——
                 // 而这恰好是他唯一能做的动作。
-                <p className="mt-2 rounded-lg border border-[#d4a72c66] bg-[#fff8c5] px-3 py-1.5 text-xs text-gh-fg">
+                <p className="mt-2 rounded-lg border border-[#d9a44159] bg-[#fdf5e6] px-3 py-1.5 text-xs text-gh-fg">
                   还差{missingLabels(chat.missingFields)} —— 这几项各自直接决定查什么、怎么排。
                 </p>
               )}
@@ -313,10 +316,27 @@ export default function TravelPlanner() {
  * icon 是个 emoji 而不是图标库：一个就有"这卡是活的"的表情，
  * 也不引入整套依赖。选跟场景强相关的（轮船/奶瓶/树叶），不要装饰性的。
  */
-const EXAMPLES: Array<{ icon: string; label: string; text: string }> = [
-  { icon: '🎡', label: '珠海 3 天 · 孩子 6 岁', text: '从深圳出发，想带孩子去珠海玩 3 天，孩子 6 岁' },
-  { icon: '🍼', label: '上海 2 天 · 1 岁宝宝', text: '从广州出发，想带孩子去上海玩 2 天，孩子 1 岁，节奏慢一点' },
-  { icon: '🌿', label: '杭州 5 天 · 俩娃 3 岁 + 8 岁', text: '从北京出发，想带两个孩子去杭州玩 5 天，一个 3 岁一个 8 岁' },
+const EXAMPLES: Array<{ icon: string; label: string; text: string; tone: string }> = [
+  {
+    icon: '🎡',
+    label: '珠海 3 天 · 孩子 6 岁',
+    text: '从深圳出发，想带孩子去珠海玩 3 天，孩子 6 岁',
+    // 每个场景一个语义化的马卡龙底色（海风青/甜杏/草木青）——
+    // 色相跟着场景走，但饱和度全部压低，低到"扫过去只是温度不同"
+    tone: 'border-[#cfe2de] bg-[#eff6f4] hover:border-[#b3d2cc] hover:bg-[#e0efec]',
+  },
+  {
+    icon: '🍼',
+    label: '上海 2 天 · 1 岁宝宝',
+    text: '从广州出发，想带孩子去上海玩 2 天，孩子 1 岁，节奏慢一点',
+    tone: 'border-[#f0dcc8] bg-[#fdf2e7] hover:border-[#e3c6a8] hover:bg-[#fae8d8]',
+  },
+  {
+    icon: '🌿',
+    label: '杭州 5 天 · 俩娃 3 岁 + 8 岁',
+    text: '从北京出发，想带两个孩子去杭州玩 5 天，一个 3 岁一个 8 岁',
+    tone: 'border-[#d2e0c9] bg-[#f0f5ea] hover:border-[#bcd0b0] hover:bg-[#e5eedd]',
+  },
 ]
 
 /* ============================================================
@@ -383,7 +403,7 @@ function ProfileCard({
               <span
                 className={
                   'z-10 mt-1.5 h-2 w-2 shrink-0 rounded-full ring-4 ring-white ' +
-                  (blank ? 'border-[1.5px] border-[#d4a72c] bg-white' : 'bg-gh-fg-faint')
+                  (blank ? 'border-[1.5px] border-[#d9a441] bg-white' : 'bg-gh-fg-faint')
                 }
               />
               <dt className="flex-1 text-gh-fg-muted">
@@ -475,7 +495,7 @@ function PersonaCard({ persona }: { persona: Persona }) {
         {persona.inferences.map((it) => (
           <li key={it.key} className="relative pl-5">
             {/* ring 用同一块暖底，不能用白色 —— 否则每个圆点周围都挂一个白圈 */}
-            <span className="absolute left-0 top-1 h-2 w-2 rounded-full bg-[#d4a72c] ring-4 ring-[#fffdf6]" />
+            <span className="absolute left-0 top-1 h-2 w-2 rounded-full bg-[#d9a441] ring-4 ring-[#fffdf6]" />
             <p className="text-xs leading-4 text-gh-fg-muted">{PERSONA_LABELS[it.key]}</p>
             <p className="mt-0.5 text-sm font-medium leading-snug text-gh-fg">{it.value}</p>
             {it.evidence && (
@@ -660,7 +680,7 @@ function PlanView({
       </div>
 
       {plan.warnings.length > 0 && (
-        <div className="rounded-lg border border-[#d4a72c66] bg-[#fff8c5] p-4">
+        <div className="rounded-lg border border-[#d9a44159] bg-[#fdf5e6] p-4">
           <h3 className="text-sm font-semibold text-gh-fg">注意事项</h3>
           <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-gh-fg">
             {plan.warnings.map((w, i) => (
@@ -1343,7 +1363,7 @@ function TransferLine({ transfer: t }: { transfer: Transfer }) {
       {(!t.direct || t.transferCity || t.jumpUrl) && (
         <p className="mt-1 flex items-center gap-2 text-xs">
           {(!t.direct || t.transferCity) && (
-            <span className="rounded-full bg-[#fff8c5] px-2 py-0.5 text-[#9a6700]">
+            <span className="rounded-full bg-[#fdf5e6] px-2 py-0.5 text-[#9a6700]">
               需在{t.transferCity ?? '中途'}换乘
             </span>
           )}

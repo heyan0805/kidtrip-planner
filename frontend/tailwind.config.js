@@ -3,19 +3,25 @@ export default {
   content: ["./index.html", "./src/**/*.{js,ts,jsx,tsx}"],
   theme: {
     extend: {
-      // GitHub Primer（浅色）的调色板。为什么整套搬过来而不是散着写任意值：
-      // 样式要"像 GitHub"，靠的是**所有灰阶都来自同一套色板** ——
-      // 散写 #999、#666 这种"差不多的灰"，拼出来的就是"仿品感"。
+      // 品牌调色板：结构上仍是一套语义槽位（canvas/border/fg/accent/green/red），
+      // 但色相从 GitHub Primer 的冷灰蓝整体转成"鼠尾草青绿 + 暖燕麦底"——
+      // 契合亲子产品的温润气质。规矩不变：**所有灰阶/绿阶只从这一套里取**，
+      // 散写"差不多的颜色"拼出来就是仿品感。
       colors: {
         gh: {
-          canvas: '#f6f8fa',            // 页面底
-          border: { DEFAULT: '#d1d9e0', muted: '#d8dee4' },
+          canvas: '#f7f6f1',            // 页面底：暖燕麦白（根节点另叠一层 from/via/to 柔光渐变）
+          border: { DEFAULT: '#d7ddd4', muted: '#e1e6dd' },  // 低饱和淡青绿描边
           fg: { DEFAULT: '#1f2328', muted: '#59636e', faint: '#818b98' },
-          accent: '#0969da',            // 链接/选中
-          'accent-soft': '#ddf4ff',     // 强调底色（用户气泡、徽标）
-          green: { DEFAULT: '#1f883d', hover: '#1a7f37' }, // 主按钮
+          accent: '#4e7d5f',            // 链接/聚焦/选中（原 Primer 蓝 → 鼠尾草深绿）
+          'accent-soft': '#e4efe3',     // 强调底色（用户气泡、徽标）
+          green: { DEFAULT: '#5b8f6e', hover: '#4d7f5f' },  // 主按钮基色（渐变在组件层叠加）
           red: '#d1242f',
         },
+      },
+      backgroundImage: {
+        // 主按钮的"鼠尾草 → 森林青"微渐变：发送、生成行程共用这一个，
+        // 渐变只此一份，两颗按钮才像一家人
+        'sage-gradient': 'linear-gradient(135deg, #85ab8b 0%, #4f8a68 100%)',
       },
       // 生成行程时的等待动画。只有两个，而且**没有一个表示"完成到百分之几"** ——
       // 五步的耗时完全不可预测（模型那两段在 10~30 秒之间浮动），
