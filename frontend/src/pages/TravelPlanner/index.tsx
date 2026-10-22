@@ -77,8 +77,27 @@ export default function TravelPlanner() {
     <div className="min-h-screen bg-gh-canvas">
       <div className="mx-auto max-w-5xl px-4 py-8">
         <header>
-          <div className="flex items-baseline justify-between">
-            <h1 className="text-xl font-semibold text-gh-fg">童行 · 带娃旅游规划器</h1>
+          <div className="flex items-center justify-between">
+            <div className="flex min-w-0 items-center gap-2.5">
+              {/* logo：大人+小孩两个剪影。品牌感是"被记住"的第一步，
+                  但刻意不画复杂插画 —— 一块绿色圆角底 + 两个人形，缩到 16px 依然认得出 */}
+              <span
+                aria-hidden
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gh-green text-white"
+              >
+                <svg viewBox="0 0 24 24" fill="currentColor" className="h-5 w-5">
+                  <circle cx="9" cy="7" r="3.2" />
+                  <path d="M3 19.5c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5v.5H3z" />
+                  <circle cx="17.5" cy="11" r="2.3" opacity=".7" />
+                  <path d="M13.8 20c.1-2.5 2-4.3 4.4-4.3.9 0 1.7.2 2.4.7-1 2.1-3 3.6-5.4 3.6z" opacity=".7" />
+                </svg>
+              </span>
+              <h1 className="truncate text-xl font-semibold text-gh-fg">童行 · 带娃旅游规划器</h1>
+              {/* 徽标只声明身份（AI + 亲子），不声明能力等级 —— "专家""官方"这类词背不起 */}
+              <span className="shrink-0 rounded-full bg-gh-accent-soft px-2 py-0.5 text-xs font-medium text-gh-accent">
+                AI 亲子版
+              </span>
+            </div>
             <button
               type="button"
               onClick={chat.reset}
@@ -107,21 +126,36 @@ export default function TravelPlanner() {
         <div className="mt-6 grid gap-6 md:grid-cols-[1fr_320px]">
           {/* ── 左：对话区 ────────────────────────────────── */}
           <section className="ui-card flex min-h-[520px] flex-col">
+            {/* 就绪条：一句"系统活着"的状态。右边的词只写**做得到的**：
+                数据是真的（飞猪查的）、行程可溯源（provenance 每条都能点）——
+                效果图上的"官方真实数据比对"不抄，我们不是官方，这种话评委一追问就露怯 */}
+            <div className="flex items-center justify-between border-b border-gh-border-muted px-4 py-2 text-xs">
+              <span className="flex items-center gap-1.5 text-gh-fg-muted">
+                <span aria-hidden className="h-2 w-2 rounded-full bg-gh-green" />
+                带娃旅行助理已就绪
+              </span>
+              <span className="text-gh-fg-faint">真实数据 · 行程可溯源</span>
+            </div>
             <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto p-4">
               {chat.messages.length === 0 && (
-                <div className="flex h-full flex-col justify-center gap-6">
+                // 居中的 hero 空态：这半屏是首屏主角，一行小灰字撑不起"欢迎来用"的姿态。
+                // 效果图顶部那枚小徽章不抄 —— 头部已有 logo + AI 亲子版徽标，再摆一个是重复。
+                <div className="flex h-full flex-col items-center justify-center gap-5 text-center">
                   <div>
-                    <p className="text-sm text-gh-fg">说说你的计划 —— 我会一轮轮把信息问清楚，再真的去查。</p>
-                    <p className="mt-1 text-xs text-gh-fg-faint">
-                      信息不齐我不会瞎猜，缺什么就问什么。
+                    <p className="text-2xl font-semibold tracking-tight text-gh-fg">说说你的计划 ——</p>
+                    <p className="mx-auto mt-2 max-w-md text-sm text-gh-fg-muted">
+                      我会一轮轮把信息问清楚，再真的去查。
+                      怕走路、要午睡、想避开人多这些细节都能直接说。
                     </p>
                   </div>
                   {/* 一键示例：评委的真实处境是"不知道能问什么、也懒得想"。
                       三个都自带出发地，点下去到看见行程少一轮追问 —— 十几秒换来的是
-                      他愿不愿意继续看下去。 */}
+                      他愿不愿意继续看下去。
+                      ⚠️ 只留这一组入口：另一个方案在中间还摆三张"建议问题"卡，
+                      和这两个 chips 功能重复，同屏两组"你可以这样问"只会让人犹豫点哪个。 */}
                   <div>
                     <p className="text-xs font-medium text-gh-fg-muted">没想好？点一个，直接发出去：</p>
-                    <div data-probe="examples" className="mt-2 flex flex-wrap gap-2">
+                    <div data-probe="examples" className="mt-2 flex flex-wrap justify-center gap-2">
                       {EXAMPLES.map((ex) => (
                         <button
                           key={ex.label}
@@ -131,7 +165,9 @@ export default function TravelPlanner() {
                           onClick={() => void chat.sendRound(ex.text)}
                           className="rounded-full border border-gh-border bg-white px-3.5 py-2 text-[13px] text-gh-fg hover:border-gh-accent hover:bg-gh-accent-soft disabled:opacity-50"
                         >
-                          {ex.label}
+                          {/* icon 单独 span：探针按 [data-label] 抠文字，emoji 不掺进断言 */}
+                          <span aria-hidden className="mr-1">{ex.icon}</span>
+                          <span data-label>{ex.label}</span>
                         </button>
                       ))}
                     </div>
@@ -163,32 +199,41 @@ export default function TravelPlanner() {
               </div>
             )}
 
-            <div className="flex gap-2 border-t border-gh-border-muted p-3">
-              <input
-                ref={inputRef}
-                value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  // 中文输入法在组词过程中也会触发 Enter（keyCode 229），
-                  // 不挡的话会出现"字还没选完就发出去了"。isComposing 就是给这个用的。
-                  if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-                    e.preventDefault()
-                    void submit()
+            <div className="border-t border-gh-border-muted p-3">
+              <div className="flex gap-2">
+                <input
+                  ref={inputRef}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    // 中文输入法在组词过程中也会触发 Enter（keyCode 229），
+                    // 不挡的话会出现"字还没选完就发出去了"。isComposing 就是给这个用的。
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                      e.preventDefault()
+                      void submit()
+                    }
+                  }}
+                  placeholder={
+                    busy
+                      ? '请稍等这一轮结束…'
+                      // 占位符顺便当"怎么问"的示范：给结构（谁+去哪+几天），不给具体答案
+                      : '说说你的计划，例如：想带俩娃去海边玩 3 天，不想太赶'
                   }
-                }}
-                placeholder={busy ? '请稍等这一轮结束…' : '说说你的计划'}
-                disabled={busy}
-                className="flex-1 rounded-md border border-gh-border bg-white px-3 py-1.5 text-sm text-gh-fg outline-none focus:border-gh-accent focus:ring-2 focus:ring-[#0969da33] disabled:bg-gh-canvas"
-              />
-              <button
-                type="button"
-                onClick={() => void submit()}
-                // 忙碌时禁用，而不是"点了没反应" —— 闸门在 hook 里，这里要让它可见
-                disabled={busy || !draft.trim()}
-                className="rounded-md bg-gh-green px-4 py-1.5 text-sm font-medium text-white hover:bg-gh-green-hover disabled:opacity-50"
-              >
-                发送
-              </button>
+                  disabled={busy}
+                  className="flex-1 rounded-md border border-gh-border bg-white px-3 py-1.5 text-sm text-gh-fg outline-none focus:border-gh-accent focus:ring-2 focus:ring-[#0969da33] disabled:bg-gh-canvas"
+                />
+                <button
+                  type="button"
+                  onClick={() => void submit()}
+                  // 忙碌时禁用，而不是"点了没反应" —— 闸门在 hook 里，这里要让它可见
+                  disabled={busy || !draft.trim()}
+                  className="rounded-md bg-gh-green px-4 py-1.5 text-sm font-medium text-white hover:bg-gh-green-hover disabled:opacity-50"
+                >
+                  发送
+                </button>
+              </div>
+              {/* 一行小字换来少一次"打了字没反应"的困惑。放右下角，不跟占位符抢地方 */}
+              <p className="mt-1.5 text-right text-xs text-gh-fg-faint">按 Enter 发送</p>
             </div>
           </section>
 
@@ -264,11 +309,14 @@ export default function TravelPlanner() {
  * ⚠️ 三个都自带出发地，且城市远/中/近各一个：
  *    近的（深圳→珠海）基本不查大交通，远的（北京→杭州）会真去查机票和车次 ——
  *    点哪一个都不撞同一条链路，顺手把两种演示都覆盖了。
+ *
+ * icon 是个 emoji 而不是图标库：一个就有"这卡是活的"的表情，
+ * 也不引入整套依赖。选跟场景强相关的（轮船/奶瓶/树叶），不要装饰性的。
  */
-const EXAMPLES: Array<{ label: string; text: string }> = [
-  { label: '珠海 3 天 · 孩子 6 岁', text: '从深圳出发，想带孩子去珠海玩 3 天，孩子 6 岁' },
-  { label: '上海 2 天 · 1 岁宝宝', text: '从广州出发，想带孩子去上海玩 2 天，孩子 1 岁，节奏慢一点' },
-  { label: '杭州 5 天 · 俩娃 3 岁 + 8 岁', text: '从北京出发，想带两个孩子去杭州玩 5 天，一个 3 岁一个 8 岁' },
+const EXAMPLES: Array<{ icon: string; label: string; text: string }> = [
+  { icon: '🎡', label: '珠海 3 天 · 孩子 6 岁', text: '从深圳出发，想带孩子去珠海玩 3 天，孩子 6 岁' },
+  { icon: '🍼', label: '上海 2 天 · 1 岁宝宝', text: '从广州出发，想带孩子去上海玩 2 天，孩子 1 岁，节奏慢一点' },
+  { icon: '🌿', label: '杭州 5 天 · 俩娃 3 岁 + 8 岁', text: '从北京出发，想带两个孩子去杭州玩 5 天，一个 3 岁一个 8 岁' },
 ]
 
 /* ============================================================

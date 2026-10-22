@@ -34,7 +34,6 @@ const SUBTITLE = '我去查真实的景点、酒店和车次'
 const CHIP_LABELS = ['珠海 3 天 · 孩子 6 岁', '上海 2 天 · 1 岁宝宝', '杭州 5 天 · 俩娃 3 岁 + 8 岁']
 /** 点第一个 chip 之后，聊天里应该出现的是**这句**，不是上面那个短标签 */
 const EXPECTED_SENT = '从深圳出发，想带孩子去珠海玩 3 天，孩子 6 岁'
-
 const results = []
 function check(ok, label, detail) {
   results.push({ ok, label, detail })
@@ -51,13 +50,19 @@ await mobile.goto(APP_URL, { waitUntil: 'networkidle' })
 
 const bodyText = await mobile.evaluate(() => document.body.innerText)
 check(bodyText.includes(SUBTITLE), 'A1 标题下有那句"我是干什么的"', SUBTITLE)
+check(
+  bodyText.includes('AI 亲子版') && bodyText.includes('带娃旅行助理已就绪'),
+  'A2 品牌徽标与就绪条在位',
+  'AI 亲子版 / 带娃旅行助理已就绪',
+)
+check(bodyText.includes('按 Enter 发送'), 'A3 输入框下有 Enter 提示', '按 Enter 发送')
 
-const labels = await mobile.$$eval('[data-probe="examples"] button', (els) =>
+const labels = await mobile.$$eval('[data-probe="examples"] button [data-label]', (els) =>
   els.map((e) => e.textContent.trim()),
 )
 check(
   labels.length === CHIP_LABELS.length && CHIP_LABELS.every((t, i) => labels[i] === t),
-  'A2 三个示例 chip 都在，文案逐字对得上',
+  'A4 三个示例 chip 都在，文案逐字对得上（emoji 不掺进断言）',
   JSON.stringify(labels),
 )
 
@@ -76,12 +81,12 @@ await mobile.waitForFunction(
 ).catch(() => {})
 
 const afterClick = await mobile.evaluate(() => document.body.innerText)
-check(afterClick.includes(EXPECTED_SENT), 'A3 点 chip 发出去的是完整那句话', EXPECTED_SENT)
+check(afterClick.includes(EXPECTED_SENT), 'A5 点 chip 发出去的是完整那句话', EXPECTED_SENT)
 
 // 助手回话之后 chip 应该让位（空态只在没有消息时出现）
 await mobile.waitForTimeout(1200)
 const chipsGone = await mobile.$$eval('[data-probe="examples"]', (e) => e.length)
-check(chipsGone === 0 && before === 3, 'A4 开聊之后示例 chip 让位（空态只属于首屏）', `点击前 ${before} 个，之后 ${chipsGone} 个`)
+check(chipsGone === 0 && before === 3, 'A6 开聊之后示例 chip 让位（空态只属于首屏）', `点击前 ${before} 个，之后 ${chipsGone} 个`)
 
 await mobile.screenshot({ path: `${SHOTS}firstscreen-mobile-talked.png` })
 
