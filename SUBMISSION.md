@@ -1,7 +1,8 @@
 <!--
 可直接粘贴到参赛 Issue。模板每节标题都保留了，按顺序贴即可。
 ⚠️ 「团队名称 / 其他成员」两项我给了建议值，需要改动就改那两行。
-⚠️ 文末的线上试用地址要不要公开由你决定，删掉不影响说明的完整性。
+⚠️ 最后一节「项目链接与复现方式」里的线上地址（http://114.132.233.6/）要不要公开由你决定，
+   不打算公开就删掉表格里那一行和「最快体验」整段，其余内容仍然成立。
 -->
 
 ## 参赛项目名称
@@ -107,3 +108,63 @@
 实测对比：同一个约 1500 字的请求，思考开 → 9843 个 token（其中 8866 是思考）且超时失败；关掉思考 → 519 个 token、11 秒稳定返回。**这不是性能优化，是能否可用。**
 
 另外两个踩过的坑，也一并写在这里，方便复现：`sk-ws-` 开头的**工作区密钥只对专属网关有效**，打公网 `dashscope.aliyuncs.com` 会返回 `401 invalid_api_key`（两者不能混用）；模型名也要用该网关实际开通的（`qwen-plus` 等在 `/models` 里列着但调用报 `400 Model.Unsupported`）。
+
+## 项目链接与复现方式
+
+| 入口 | 地址 | 说明 |
+|---|---|---|
+| **GitHub 仓库** | <https://github.com/heyan0805/kidtrip-planner> | public，MIT。仓库里**没有任何真实密钥**，所有密钥位置都是 `${...}` 占位符 |
+| **在线 Demo** | <http://114.132.233.6/> | 打开就能用，不用注册、不用装环境。同一台 4C4G 轻量服务器上跑 nginx + 后端 |
+| 演示视频 | 暂无 | 没录屏 —— 线上可点开直接试，比视频更真实 |
+
+### 最快体验（不用装任何东西，约 1 分钟）
+
+打开 <http://114.132.233.6/> → 输入「想带孩子去珠海玩 3 天，孩子 6 岁」→ 补答它追问的出发城市和日期 → 点生成。
+**一次 30~60 秒**（它不是装慢，是真在查飞猪的景点、酒店和车次）。
+
+几个值得留意的地方：每天的时间轴（点位、耗时、距离）；景点卡右上角「换一个（还剩 N 个）」；点了缩略图能看大图，一天有多个场景时可左右翻；页面底部「展开溯源」能看到这一趟真实发出的查询命令和被规则筛掉的候选。
+
+### 只跑前端（不装 Java、不配密钥，约 2 分钟）
+
+```bash
+git clone https://github.com/heyan0805/kidtrip-planner.git
+cd kidtrip-planner/frontend
+npm install
+VITE_USE_MOCK=true npm run dev      # → http://localhost:5173
+```
+
+Windows PowerShell 里第一句换成：`$env:VITE_USE_MOCK="true"; npm run dev`
+
+假数据能跑通全流程。降级刻意做得很显眼：界面上有黄色横幅、行程里的名字都带「（假数据）」——静默降级会让人拿着一份编出来的行程去订酒店。
+
+### 完整复现（前后端 + 真实数据）
+
+**前置**：Node ≥ 20.19 或 ≥ 22.12（Vite 8 硬要求）· JDK 21 · Maven 3.9+ · `npm i -g @fly-ai/flyai-cli` · 一份 OpenAI 兼容的模型 Key（本项目实测百炼 · 通义千问）· 黑客松发放的飞猪 FlyAI 凭据（`~/.flyai/config.json` 与 `device-id`，按 FlyAI CLI 的说明放置）。
+
+```bash
+# 1) 环境变量（都不是可选项：仓库里故意不留默认值）
+export KIDTRIP_LLM_API_KEY=sk-xxxx
+export KIDTRIP_LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+export KIDTRIP_LLM_MODEL_NAME=qwen-plus
+export KIDTRIP_LLM_ENABLE_THINKING=false      # 用千问 3.x 必填，否则非流式请求会被网关掐断
+export FLYAI_CLI_PATH="$(npm root -g)/@fly-ai/flyai-cli/dist/flyai-bundle.cjs"
+
+# 2) 后端 → http://localhost:8003（首次启动会联网拉 Maven 依赖）
+cd backend && mvn spring-boot:run
+
+# 3) 前端 → http://localhost:5173（另开一个终端）
+cd frontend && npm install && npm run dev
+```
+
+**启动自检**：`curl http://localhost:8003/api/health` 应返回 `{"code":0,"message":"ok",...}`。
+缺密钥时后端会在**启动阶段**直接报「缺少配置 kidtrip.llm.api-key」，不会等到你点生成才失败——失败趁早，且带着"该怎么修"一起失败。
+
+**跑测试**：`cd backend && mvn test` → **378 个用例全绿**，不需要任何密钥（模型用 `FakeChatModel` 替身，测试不碰网络）。
+
+**没有飞猪凭据怎么办**：后端能起来，但检索层查不到数据，生成会如实报"这次没查成"（不做假数据冒充）。这种情况下建议直接用上面的 mock 模式体验界面与交互。
+
+### 关于密钥（模板要求，明确回应）
+
+- 仓库里 **没有** 提交任何 API Key、密码、token、私钥；模型密钥、飞猪凭据全部走环境变量注入。
+- 线上那台的环境变量单独放在系统目录（`chmod 600`，仅属主可读），不在仓库、不在 jar 里。
+- 唯一需要说明的是**飞猪凭据不能共享**：它绑设备标识，且上游对访问来源有风控（机房 IP 实测可用，但会波动）。所以在线 Demo 才是最省事的体验入口。
