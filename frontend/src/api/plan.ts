@@ -101,7 +101,7 @@ const MOCK_FIELDS: Array<{ key: keyof TravelParams; ask: string }> = [
   { key: 'city', ask: '想去哪座城市呀？' },
   { key: 'days', ask: '打算玩几天？' },
   { key: 'startDate', ask: '哪天出发？（比如 2026-10-24）' },
-  { key: 'childAge', ask: '孩子多大了？' },
+  { key: 'childAges', ask: '孩子多大了？（有两个就都说说）' },
   { key: 'pace', ask: '节奏想怎么安排？（慢 / 中 / 快）' },
   { key: 'stroller', ask: '需要带推车吗？' },
 ]
@@ -176,14 +176,21 @@ async function mockChat(req: PlanChatRequest): Promise<PlanChatData> {
   }
   if (patch.days == null && /天/.test(text) && nums[0]) patch.days = nums[0]
 
-  // ── 孩子年龄："6 岁" ────────────────────────────────────────────
+  // ── 孩子年龄："6 岁"，一句里说了两个就都抠出来 ──────────────────
   // ⚠️ 这两段（年龄、日期）是 2026-10-14 补的，原因很具体：
   //    "生成行程"按钮在**五项必填**（出发地/目的地/天数/出发日期/孩子年龄）齐了之后才可点，
   //    而这份假数据原来只抠得出城市和天数 —— 于是降级路上按钮**永远是灰的**：
   //    后端一挂，用户看到的是一个打不开功能的界面。而降级路存在的全部意义
   //    就是"出事那天还能演示"，一个点不动的按钮等于这条退路也没了。
-  const age = /(\d+)\s*岁/.exec(text)
-  if (patch.childAge == null && age) patch.childAge = Number(age[1])
+  //
+  // 多孩子的两处不一样，值得说清楚：
+  //   · 真实链路：模型每轮输出**完整**的年龄数组（后端整体替换），不需要谁去拼。
+  //   · mock：它只会抠**这一句**，不累积的话"5 岁"+"还有个 8 岁"会只剩一个。
+  //     所以这里做去重合并 —— 降级路的目标是"看起来还能用"，不是和真实逻辑逐字一致。
+  const ages = (text.match(/\d+\s*岁/g) ?? []).map((s) => parseInt(s, 10))
+  if (ages.length > 0) {
+    patch.childAges = Array.from(new Set([...(patch.childAges ?? []), ...ages]))
+  }
 
   // ── 出发日期：ISO（2026-10-24）/ 中文（11月17日）/ 短横（11-17）──
   // 年份的规矩和真实后端的 TravelDates 一致：**只说月日就按今年，过去了就顺延到明年**。

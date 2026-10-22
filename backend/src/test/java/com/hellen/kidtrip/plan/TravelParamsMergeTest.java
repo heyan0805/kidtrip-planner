@@ -3,6 +3,7 @@ package com.hellen.kidtrip.plan;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -29,13 +30,13 @@ class TravelParamsMergeTest {
      * 包一层之后，加字段只需要改这一个方法。
      */
     private static TravelParams p(String city, Integer days, String startDate,
-                                  List<String> preferences, String pace, Integer childAge, Boolean stroller) {
-        return new TravelParams(null, city, days, startDate, preferences, pace, childAge, stroller);
+                                  List<String> preferences, String pace, List<Integer> childAges, Boolean stroller) {
+        return new TravelParams(null, city, days, startDate, preferences, pace, childAges, stroller);
     }
 
     /** 一个"聊了几轮之后"的典型画像 */
     private static TravelParams current() {
-        return p("珠海", 3, "2026-10-24", List.of("动物园"), "慢", 7, true);
+        return p("珠海", 3, "2026-10-24", List.of("动物园"), "慢", List.of(7), true);
     }
 
     private static final TravelParams EMPTY = TravelParams.empty();
@@ -118,15 +119,77 @@ class TravelParamsMergeTest {
         t = t.mergedWith(p("珠海", null, null, null, null, null, null));
         t = t.mergedWith(p(null, 3, null, null, null, null, null));
         t = t.mergedWith(p(null, null, null, List.of("海洋馆"), null, null, null));
-        t = t.mergedWith(p(null, null, null, null, null, 5, null));
+        t = t.mergedWith(p(null, null, null, null, null, List.of(5), null));
         t = t.mergedWith(p(null, null, null, null, null, null, true));
 
         assertEquals("珠海", t.city());
         assertEquals(3, t.days());
         assertEquals(List.of("海洋馆"), t.preferences());
-        assertEquals(5, t.childAge());
+        assertEquals(List.of(5), t.childAges());
         assertTrue(t.stroller());
         assertFalse(t.city().isBlank());
+    }
+
+    /* ============================================================
+     * childAges —— 2026-10-22 由单值 childAge 改成列表。
+     * 它的合并规则**和 preferences 故意不同**：整体替换，不逐项合并。
+     * 理由见 TravelParams 里那段注释（模型每轮输出全部孩子的年龄）。
+     * ============================================================ */
+
+    @Test
+    @DisplayName("childAges 是整体替换：原来的 [5] + 这轮的 [5,8] → [5,8]，不是 [5,5,8]")
+    void childAgesReplacesWholeList() {
+        TravelParams t = p(null, null, null, null, null, List.of(5), null);
+
+        TravelParams merged = t.mergedWith(p(null, null, null, null, null, List.of(5, 8), null));
+        assertEquals(List.of(5, 8), merged.childAges(),
+                "模型这一轮说的是'全部孩子的年龄'，不是'这轮新听到的那一个'");
+
+        // 修正也算替换：用户说"记错了，老大 9 岁" → 不该变成 [5, 9]
+        assertEquals(List.of(5, 9), t.mergedWith(p(null, null, null, null, null, List.of(5, 9), null)).childAges());
+        // 单个也不例外：从两个改成一个（用户说"其实只有一个孩子"）是允许的
+        assertEquals(List.of(6), p(null, null, null, null, null, List.of(5, 8), null)
+                .mergedWith(p(null, null, null, null, null, List.of(6), null)).childAges());
+    }
+
+    @Test
+    @DisplayName("childAges 空列表 / null = 这轮没提 → 保留原值，不能把已知年龄抹掉")
+    void emptyChildAgesDoesNotWipeKnownAges() {
+        TravelParams t = p(null, null, null, null, null, List.of(5, 8), null);
+
+        assertEquals(List.of(5, 8), t.mergedWith(p(null, null, null, null, null, List.of(), null)).childAges());
+        assertEquals(List.of(5, 8), t.mergedWith(p(null, null, null, null, null, null, null)).childAges());
+        // 反方向：原来没有，这轮也没给 → 仍然是空，不能变成一个凭空的 [0]
+        assertNull(EMPTY.mergedWith(EMPTY).childAges());
+    }
+
+    @Test
+    @DisplayName("youngestChildAge 取最小的那个 —— 节奏由走得最慢的孩子决定")
+    void youngestChildAgeTakesMinimum() {
+        assertEquals(Integer.valueOf(3), p(null, null, null, null, null, List.of(3, 8), null).youngestChildAge());
+        assertEquals(Integer.valueOf(5), p(null, null, null, null, null, List.of(10, 5, 7), null).youngestChildAge(),
+                "不看顺序，只看谁最小");
+        assertNull(p(null, null, null, null, null, List.of(), null).youngestChildAge());
+        assertNull(p(null, null, null, null, null, null, null).youngestChildAge());
+
+        // 模型偶尔给半截输出（[5, null] 或 0）：已知里取最小，别让一个坏值废掉整条信息。
+        // 用 Arrays.asList 而不是 List.of —— List.of 不接受 null 元素，会当场 NPE。
+        assertEquals(Integer.valueOf(5), p(null, null, null, null, null, Arrays.asList(5, null), null).youngestChildAge());
+        assertEquals(Integer.valueOf(2), p(null, null, null, null, null, List.of(0, 2), null).youngestChildAge());
+        assertNull(p(null, null, null, null, null, List.of(0, -1), null).youngestChildAge(),
+                "全是无效值 → 等于没有信息，不能返回 0 让规则层以为孩子是 0 岁");
+    }
+
+    @Test
+    @DisplayName("childAgesText 是三个 prompt 共用的那一句，格式只有这一种")
+    void childAgesTextIsSharedFormat() {
+        assertEquals("5 岁", p(null, null, null, null, null, List.of(5), null).childAgesText());
+        assertEquals("5 岁、8 岁", p(null, null, null, null, null, List.of(5, 8), null).childAgesText());
+        // 没有时返回 null，由各调用方决定说"还没问过"/"未确定"/"未提供"
+        assertNull(p(null, null, null, null, null, List.of(), null).childAgesText());
+        assertNull(p(null, null, null, null, null, null, null).childAgesText());
+        assertNull(p(null, null, null, null, null, List.of(0), null).childAgesText(),
+                "0 岁不是年龄，是模型填错了 —— 当作没提供，别对用户说'0 岁'");
     }
 
     /* ============================================================
@@ -139,7 +202,7 @@ class TravelParamsMergeTest {
     @DisplayName("origin 走'空值即未答'：模型没提出发地 → 保留原值，不会被抹掉")
     void originFollowsSameAnswerRuleAsCity() {
         TravelParams withOrigin = new TravelParams("广州", "珠海", 3, "2026-10-24",
-                List.of("动物园"), "慢", 7, true);
+                List.of("动物园"), "慢", List.of(7), true);
 
         assertEquals("广州", withOrigin.mergedWith(EMPTY).origin(),
                 "模型这一轮没提出发地 → 上一轮问到的'广州'必须留着");
@@ -161,7 +224,7 @@ class TravelParamsMergeTest {
     @Test
     @DisplayName("sameCity：出发地==目的地是合法的本地游，不能被当成'没填'")
     void sameCityRecognisesLocalTrip() {
-        TravelParams local = new TravelParams("珠海", "珠海", 6, "2026-10-24", null, "慢", 6, null);
+        TravelParams local = new TravelParams("珠海", "珠海", 6, "2026-10-24", null, "慢", List.of(6), null);
         assertTrue(local.sameCity(),
                 "本地游（就在珠海玩 6 天）是合法输入 —— 判错会导致给一次本地出行报'没查到车次'");
 
@@ -208,7 +271,7 @@ class TravelParamsMergeTest {
         assertNull(EMPTY.startDate());
         assertNull(EMPTY.preferences());
         assertNull(EMPTY.pace());
-        assertNull(EMPTY.childAge());
+        assertNull(EMPTY.childAges());
         assertNull(EMPTY.stroller());
 
         // 顺带钉住另一件事：empty() 每次调用都该是**相等**的（它是值，不是单例状态）

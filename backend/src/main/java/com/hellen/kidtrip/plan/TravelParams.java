@@ -41,7 +41,31 @@ public record TravelParams(
         List<String> preferences,
         /** 慢 / 中 / 快 */
         String pace,
-        Integer childAge,
+        /**
+         * 孩子的年龄，**一个孩子一项**。null / 空列表 = 还没问过。
+         *
+         * ── 为什么是列表，而不是"孩子数量" ──────────────────────────────
+         *   因为一个 3 岁和一个 10 岁要的是**两套完全不同的行程**（午睡 vs 徒步、
+         *   亲子乐园 vs 科技馆）。存 `childCount: 2` 是**假支持**：数据结构上
+         *   承认了"有两个孩子"，却回答不了"第二个多大"这个唯一重要的问题。
+         *   存数量以后还要再改一次 —— 不如一次改对。
+         *
+         * ── 为什么**不收**大人数量（2026-10-22 拍板，别再讨论）────────────
+         *   大人数量客观上有两个真实影响：①能不能分头行动（2 大 1 小可以
+         *   "一人带娃回酒店午睡、一人继续逛"，1 大 1 小不行）②推车/抱娃的
+         *   可行性（2 大能一人抱娃一人扛车）。**这两条我们明确不建模。**
+         *   它们是长尾玩法，而规则层现在只按 stroller 布尔值筛，压根没有
+         *   按大人数分支的地方 —— 收了这个字段不会有任何输出变化。
+         *
+         *   原则：**收了却不影响输出的字段，就是在骗用户回答问题。**
+         *   而对话轮数是这个产品最贵的资源，每多问一句就多一次流失机会。
+         *   （大人数还会影响房间数和交通费，但我们本来就不算总价 ——
+         *   界面 7 处价格全是单价，没有任何汇总。专注点是行程与住哪儿。）
+         *
+         *   如果哪天要重新引入，触发条件不是"有人想要"，而是
+         *   "规则层真的按大人数分叉了"（例如做分头行动）。
+         */
+        List<Integer> childAges,
         Boolean stroller
 ) {
 
@@ -76,9 +100,51 @@ public record TravelParams(
                 startDate,
                 preferences == null ? List.of() : preferences,
                 pace,
-                childAge,
+                childAges == null ? List.of() : childAges,
                 stroller
         );
+    }
+
+    /**
+     * 最小的那个孩子的年龄。没有孩子信息时 null。
+     *
+     * 为什么单独抽出来：多孩子的行程节奏**由最慢的那个决定，不是平均**。
+     * 两个孩子差 5 岁，上限按小的算 —— 走得动的是哥哥，走得不动的是弟弟。
+     * 调用方（例如规则层的每日景点上限）需要这个数，而不是整个列表。
+     *
+     * 过滤掉 null / ≤0 再取最小：模型偶尔会给 `[5, null]` 这种半截输出，
+     * 而"某个孩子年龄未知"不该让整条年龄信息失效 —— 用已知里最小的那个，
+     * 是**保守方向**（宁可按更小的算，行程排松一点）。
+     */
+    public Integer youngestChildAge() {
+        return childAges == null
+                ? null
+                : childAges.stream()
+                        .filter(a -> a != null && a > 0)
+                        .min(Integer::compare)
+                        .orElse(null);
+    }
+
+    /**
+     * 把年龄列表渲染成 prompt 里那句人话："5 岁、8 岁"。没有孩子信息时 null。
+     *
+     * 为什么要放在这里而不是各 prompt 里各写一遍：对话、检索计划、行程组装
+     * **三处**都要把这句喂给模型，三份实现必然分叉（一处"5岁"一处"5 岁"，
+     * 一处忘了过滤 0）。而模型看到的措辞不一致，就是行为不一致的来源。
+     *
+     * 只返回"有值时的说法"，空值交给调用方：三处对"没有"的语气本来就不同
+     * （对话端"还没问过"、检索端"未确定"、组装端"未提供"），
+     * 那不是格式问题，是各自场景下的措辞选择。
+     */
+    public String childAgesText() {
+        if (childAges == null || childAges.isEmpty()) {
+            return null;
+        }
+        List<String> parts = childAges.stream()
+                .filter(a -> a != null && a > 0)
+                .map(a -> a + " 岁")
+                .toList();
+        return parts.isEmpty() ? null : String.join("、", parts);
     }
 
     /**
@@ -124,7 +190,13 @@ public record TravelParams(
                 answered(patch.startDate()) ? patch.startDate().strip() : startDate,
                 patch.preferences() != null && !patch.preferences().isEmpty() ? patch.preferences() : preferences,
                 answered(patch.pace()) ? patch.pace().strip() : pace,
-                patch.childAge() != null && patch.childAge() > 0 ? patch.childAge() : childAge,
+                // childAges 是**整体替换**，不是逐项合并。
+                // 理由：孩子年龄是一次说全的静态信息（不像 preferences 会逐轮累积），
+                // 而 prompt 要求模型每次都输出**全部**孩子的年龄（含之前已提供的）——
+                // 所以"哦对，还有个 8 岁的"这句，模型看得到 currentParams 里的 [5]，
+                // 它会自己合出 [5, 8]。**语义判断交给模型，结构校验留给自己。**
+                // 非空才替换：空列表/缺失 = 这一轮没提，保留原值（与其他字段同一条规矩）。
+                patch.childAges() != null && !patch.childAges().isEmpty() ? patch.childAges() : childAges,
                 // 三态：只有模型**真的答了**（true / false）才覆盖，null 是"还没问过"
                 patch.stroller() != null ? patch.stroller() : stroller
         );
@@ -143,7 +215,7 @@ public record TravelParams(
      * （origin 这次加进来，这个方法一处都不用动，就是这个设计的回报。）
      */
     public TravelParams withStartDate(String newStartDate) {
-        return new TravelParams(origin, city, days, newStartDate, preferences, pace, childAge, stroller);
+        return new TravelParams(origin, city, days, newStartDate, preferences, pace, childAges, stroller);
     }
 
     /**

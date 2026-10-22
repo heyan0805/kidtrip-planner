@@ -84,7 +84,7 @@ class DayReasonsTest {
 
     private static TravelParams trip() {
         return new TravelParams("深圳", "珠海", 3, "2026-11-17",
-                List.of("动物园"), "中", 6, false);
+                List.of("动物园"), "中", List.of(6), false);
     }
 
     private static TravelDay day(int n, List<TravelSpot> spots, Transfer t, HotelStay hotel) {

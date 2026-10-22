@@ -238,7 +238,7 @@ public class ChatComposer {
                 date.date(),
                 patch.preferences(),
                 patch.pace(),
-                patch.childAge(),
+                patch.childAges(),
                 patch.stroller()
         );
     }
@@ -337,7 +337,11 @@ public class ChatComposer {
                 - city：目的地**城市**（"珠海"、"广州"、"深圳"）
                 - days：出行天数（整数）
                 - startDate：出发日期，格式 YYYY-MM-DD（用户说"国庆去"，就填今年国庆的第一天）
-                - childAge：孩子年龄（整数）
+                - childAges：孩子年龄，**数组**（每个孩子一项，从小到大，如 [5] 或 [5, 8]）
+                  · 用户只说了"孩子 5 岁"→ [5]
+                  · 说了两个孩子 → 两个都要列，[5, 8]
+                  · **如果系统已给出已知年龄，输出时必须带上全部孩子**（不是只输出这一轮新提到的那个）
+                  · 用户说了"两个孩子"却只给了一个年龄 → 在 reply 里追问另一个（会改变行程节奏）
                 - preferences：偏好，数组（["动物园","海边","室内"]）
                 - pace：节奏（"慢" / "中" / "快"）
                 - stroller：是否需要推车（true / false）
@@ -416,7 +420,7 @@ public class ChatComposer {
                     "city": "目的地城市名" 或 null,
                     "days": 天数 或 null,
                     "startDate": "YYYY-MM-DD" 或 null,
-                    "childAge": 年龄 或 null,
+                    "childAges": [年龄, 年龄] 或 null,
                     "preferences": ["偏好"] 或 [],
                     "pace": "慢/中/快" 或 null,
                     "stroller": true/false 或 null
@@ -464,7 +468,7 @@ public class ChatComposer {
         lines.add("目的地：" + answer(p.city()));
         lines.add("天数：" + (p.days() == null || p.days() <= 0 ? "还没问过" : p.days() + " 天"));
         lines.add("出发日期：" + answer(p.startDate()));
-        lines.add("孩子年龄：" + (p.childAge() == null || p.childAge() <= 0 ? "还没问过" : p.childAge() + " 岁"));
+        lines.add("孩子年龄：" + (p.childAgesText() == null ? "还没问过" : p.childAgesText()));
         lines.add("节奏：" + answer(p.pace()));
         lines.add("是否需要推车：" + (p.stroller() == null ? "**还没问过**" : (p.stroller() ? "需要" : "不需要")));
         lines.add("用户偏好：" + (p.preferences() == null || p.preferences().isEmpty()
@@ -527,7 +531,7 @@ public class ChatComposer {
     /** 日志里用一句话描述画像，别把整个对象打出来 */
     private static String describe(TravelParams p) {
         return "{origin=" + p.origin() + ", city=" + p.city() + ", days=" + p.days() + ", startDate=" + p.startDate()
-                + ", childAge=" + p.childAge() + ", pace=" + p.pace()
+                + ", childAges=" + p.childAges() + ", pace=" + p.pace()
                 + ", stroller=" + p.stroller() + ", prefs=" + p.preferences() + "}";
     }
 

@@ -48,14 +48,14 @@ class ChatComposerTest {
     void parsesReplyAndPatch() {
         FakeChatModel model = new FakeChatModel("""
                 {"reply":"3 天正好！需要带推车吗？",
-                 "params":{"days":3,"childAge":6}}
+                 "params":{"days":3,"childAges":[6]}}
                 """);
 
         PlanChatData data = composer(model).chat(TURN, CURRENT, Persona.empty());
 
         assertEquals("3 天正好！需要带推车吗？", data.reply());
         assertEquals(3, data.params().days());
-        assertEquals(6, data.params().childAge());
+        assertEquals(List.of(6), data.params().childAges());
         assertEquals("珠海", data.params().city(), "上一轮的城市必须保留");
         assertEquals(1, model.calls());
     }

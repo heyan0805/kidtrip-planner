@@ -230,7 +230,7 @@ const FIELDS: Array<{ key: keyof TravelParams; label: string }> = [
   { key: 'city', label: '目的地' },
   { key: 'days', label: '天数' },
   { key: 'startDate', label: '出发日期' },
-  { key: 'childAge', label: '孩子年龄' },
+  { key: 'childAges', label: '孩子年龄' },
   { key: 'preferences', label: '偏好' },
   { key: 'pace', label: '节奏' },
   { key: 'stroller', label: '推车' },
@@ -314,9 +314,13 @@ function renderField(key: keyof TravelParams, p: TravelParams): string {
   }
   const v = p[key]
   if (v === undefined || v === null || v === '') return '待确认'
+  // childAges 是数组，但它的每一项都要带单位（"5 岁、8 岁"而不是"5、8"）——
+  // 所以必须在通用数组分支**之前**拦下它。
+  if (key === 'childAges' && Array.isArray(v)) {
+    return v.length > 0 ? v.map((a) => `${a} 岁`).join('、') : '待确认'
+  }
   if (Array.isArray(v)) return v.length > 0 ? v.join('、') : '待确认'
   if (key === 'days') return `${v} 天`
-  if (key === 'childAge') return `${v} 岁`
   return String(v)
 }
 

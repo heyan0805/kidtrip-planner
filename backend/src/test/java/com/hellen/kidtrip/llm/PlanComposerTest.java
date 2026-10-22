@@ -58,7 +58,7 @@ class PlanComposerTest {
 
     /** 深圳 → 广州，5 天，和实测那份出问题的画像一样 */
     private static TravelParams params() {
-        return new TravelParams("深圳", "广州", 5, "2026-11-17", List.of("户外", "动物园"), "慢", 7, false);
+        return new TravelParams("深圳", "广州", 5, "2026-11-17", List.of("户外", "动物园"), "慢", List.of(7), false);
     }
 
     private static Legs realLegs() {

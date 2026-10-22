@@ -70,23 +70,45 @@ public record PlanRules(
     public static final int HARD_MAX_SPOTS_PER_DAY = 4;
 
     /**
-     * 每天几个点。**用户说的节奏优先，没说才用规则表的默认值。**
+     * 每天几个点。**用户说的节奏优先，没说才用规则表的默认值；
+     * 但有幼儿时，幼儿的体力压过用户的节奏。**
      *
      * 为什么不让 rules.maxSpotsPerDay 一统到底：
      *   用户明确说了"慢"，那就是 2 个 —— 这不是我们替他决定的。
      *   规则表那个 3 是"用户没说时我们猜的默认"，两者是不同性质的信息，
      *   混成一个数字会让"用户说了慢"这件事失效。
      *
-     * 最后仍然夹在 [1, HARD_MAX_SPOTS_PER_DAY] 之间：用户偏好不能突破产品底线。
+     * ── 为什么要收 youngestChildAge（2026-10-22 改）──────────────────
+     *   因为"一天几个点"从来不是只由 pace 决定：**最小的那个孩子几岁**同样是决定项。
+     *   一个 2 岁的孩子，一天两个点就是上限（上下午各一个，中间要午睡），
+     *   用户说"我想快点"改变不了这件事 ——
+     *   **pace 是偏好，年龄是生理事实；偏好不能突破生理事实。**
+     *   所以两者取更小的那个，最后仍然夹在 [1, HARD_MAX_SPOTS_PER_DAY] 之间。
+     *
+     *   为什么要用"最小的那个孩子"而不是平均：走得动的是哥哥，走得不动的是弟弟，
+     *   一天的行程由弟弟决定。5 岁 + 10 岁不是"7.5 岁的节奏"，是 5 岁的节奏。
+     *
+     *   为什么不直接收 TravelParams（那样调用方只传一个对象更省事）：
+     *   这样 rule 包就要 import plan 包，而 plan 包里的 PlanAssembler / DayReasons
+     *   本来就在用 PlanRules —— 变成包级双向依赖。规则表是**策略**，
+     *   只该认识"节奏"和"孩子几岁"这两个值，不该认识整份画像。
      */
-    public int spotsPerDay(String pace) {
+    public int spotsPerDay(String pace, Integer youngestChildAge) {
         int byPace = switch (pace == null ? "" : pace.strip()) {
             case "慢" -> 2;
             case "快" -> HARD_MAX_SPOTS_PER_DAY;
             case "中" -> 3;
             default -> maxSpotsPerDay;
         };
-        return Math.max(1, Math.min(HARD_MAX_SPOTS_PER_DAY, byPace));
+        int cap = byPace;
+
+        if (youngestChildAge != null && youngestChildAge <= 3) {
+            // 3 岁及以下：一天 2 个点是现实上限。这一档不分 pace ——
+            // 幼儿走不动、要午睡、随时可能情绪崩，这三件事不因"家长想快点"而改变。
+            cap = Math.min(cap, 2);
+        }
+
+        return Math.max(1, Math.min(HARD_MAX_SPOTS_PER_DAY, cap));
     }
 
     /** 用画像里的预算覆盖价格上限。以后 budget 出现在 TravelParams 里，就是这一行的调用点。 */

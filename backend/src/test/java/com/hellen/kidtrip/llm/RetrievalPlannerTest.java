@@ -25,7 +25,7 @@ class RetrievalPlannerTest {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static final TravelParams PARAMS =
-            new TravelParams(null, "珠海", 3, "2026-10-24", List.of("动物", "海洋"), "慢", 4, true);
+            new TravelParams(null, "珠海", 3, "2026-10-24", List.of("动物", "海洋"), "慢", List.of(4), true);
 
     private static RetrievalPlanner planner(FakeChatModel model) {
         return new RetrievalPlanner(model, MAPPER);
@@ -176,7 +176,7 @@ class RetrievalPlannerTest {
         RetrievalPlanner p = planner(model);
 
         p.plan(PARAMS);
-        p.plan(new TravelParams(null, "深圳", 3, "2026-10-24", List.of("动物", "海洋"), "慢", 4, true));
+        p.plan(new TravelParams(null, "深圳", 3, "2026-10-24", List.of("动物", "海洋"), "慢", List.of(4), true));
 
         assertEquals(2, model.calls(), "城市变了必须重算 —— 缓存 key 漏字段是这里最难查的 bug");
     }

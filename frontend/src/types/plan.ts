@@ -53,7 +53,8 @@ export interface TravelParams {
   preferences?: string[]
   /** 慢 / 中 / 快 */
   pace?: string
-  childAge?: number
+  /** 孩子的年龄，一个孩子一项（[5] / [5, 8]）。缺失或空 = 还没问过 */
+  childAges?: number[]
   stroller?: boolean
 }
 

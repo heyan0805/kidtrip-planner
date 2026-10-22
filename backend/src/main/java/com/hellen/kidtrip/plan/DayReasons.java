@@ -114,7 +114,9 @@ public final class DayReasons {
         PlanRules r = rules == null ? PlanRules.DEFAULT : rules;
         // "常规几个点"这个基准来自规则表 + 用户说的节奏 —— 和 PlanComposer 排程时用的是同一个数。
         // 用一个自己的数字（比如写死 3）会让"今天少排了一个"这句话和实际的排程依据对不上。
-        int perDay = r.spotsPerDay(params == null ? null : params.pace());
+        int perDay = r.spotsPerDay(
+                params == null ? null : params.pace(),
+                params == null ? null : params.youngestChildAge());
 
         List<TravelDay> out = new ArrayList<>(days.size());
         for (int i = 0; i < days.size(); i++) {

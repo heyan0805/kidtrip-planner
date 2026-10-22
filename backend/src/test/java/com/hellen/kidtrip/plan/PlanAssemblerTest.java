@@ -46,7 +46,7 @@ class PlanAssemblerTest {
     }
 
     private static TravelParams params(String pace, int days) {
-        return new TravelParams(null, "深圳", days, "2026-10-24", List.of("室内"), pace, 4, null);
+        return new TravelParams(null, "深圳", days, "2026-10-24", List.of("室内"), pace, List.of(4), null);
     }
 
     private static PlanDraft draft(String summary, PlanDraft.Day... days) {
@@ -260,14 +260,35 @@ class PlanAssemblerTest {
     @DisplayName("节奏决定每天几个点，但突破不了硬上限 4")
     void spotsPerDayFollowsPace() {
         PlanRules rules = PlanRules.DEFAULT;
-        assertEquals(2, rules.spotsPerDay("慢"));
-        assertEquals(3, rules.spotsPerDay("中"));
-        assertEquals(4, rules.spotsPerDay("快"));
-        assertEquals(rules.maxSpotsPerDay(), rules.spotsPerDay(""));
-        assertEquals(rules.maxSpotsPerDay(), rules.spotsPerDay(null));
+        assertEquals(2, rules.spotsPerDay("慢", null));
+        assertEquals(3, rules.spotsPerDay("中", null));
+        assertEquals(4, rules.spotsPerDay("快", null));
+        assertEquals(rules.maxSpotsPerDay(), rules.spotsPerDay("", null));
+        assertEquals(rules.maxSpotsPerDay(), rules.spotsPerDay(null, null));
         // 就算规则表被人改成 9，硬上限也把它压回 4 —— 产品底线不该是配置项
         PlanRules crazy = new PlanRules(null, null, 9, 15, 2, 30_000);
-        assertEquals(PlanRules.HARD_MAX_SPOTS_PER_DAY, crazy.spotsPerDay("快"));
+        assertEquals(PlanRules.HARD_MAX_SPOTS_PER_DAY, crazy.spotsPerDay("快", null));
+    }
+
+    @Test
+    @DisplayName("最小的孩子 3 岁及以下：用户说「快」也只能排 2 个 —— 偏好压不过生理事实")
+    void toddlerAgeCapsSpotsBelowPace() {
+        PlanRules rules = PlanRules.DEFAULT;
+
+        // 这是这次改动的核心断言：pace 是用户的偏好，年龄是孩子的生理事实。
+        // 用户觉得"我们能快点"，但 2 岁的孩子走不动、要午睡 —— 后者不由前者改变。
+        assertEquals(2, rules.spotsPerDay("快", 2), "2 岁的孩子，一天两个点就是上限");
+        assertEquals(2, rules.spotsPerDay("快", 3), "3 岁同样压到 2");
+        assertEquals(2, rules.spotsPerDay("中", 1), "本来就慢的节奏不会被抬高");
+
+        // 4 岁起不再压这一档：交回给 pace 判断（这不是我们懒，是没有依据再细分）
+        assertEquals(4, rules.spotsPerDay("快", 4));
+        assertEquals(3, rules.spotsPerDay("中", 5));
+        assertEquals(2, rules.spotsPerDay("慢", 9), "年龄大不会反过来放宽用户说的慢");
+
+        // 年龄未知 = 不干预，和改动之前的行为逐字一致
+        assertEquals(4, rules.spotsPerDay("快", null));
+        assertEquals(3, rules.spotsPerDay(null, null));
     }
 
     @Test

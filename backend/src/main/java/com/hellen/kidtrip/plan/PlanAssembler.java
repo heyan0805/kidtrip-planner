@@ -76,7 +76,7 @@ public final class PlanAssembler {
                 ? TravelParams.empty()
                 : params;
         int wantDays = p.days() == null || p.days() <= 0 ? 3 : p.days();
-        int perDay = rules.spotsPerDay(p.pace());
+        int perDay = rules.spotsPerDay(p.pace(), p.youngestChildAge());
 
         Map<String, PoiCandidate> byCode = CandidateCodes.index(pois);
         // 住宿：独立的索引、独立的计数器。**没有 usedHotelIds 这种东西** —— 见类注释最后一段。

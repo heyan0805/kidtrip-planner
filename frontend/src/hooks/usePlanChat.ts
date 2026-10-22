@@ -112,7 +112,7 @@ const EMPTY_PERSONA: Persona = { inferences: [] }
  *     city       去哪儿   —— 没有它，检索和排期都无从开始
  *     days       几天     —— 决定排几天、酒店要住几晚
  *     startDate  哪天走   —— 车次班次、酒店价格全跟着它
- *     childAge   孩子多大 —— 这个产品的身份约束，直接决定节奏和点位的现实性
+ *     childAges  孩子多大（数组，一个孩子一项）—— 这个产品的身份约束，直接决定节奏和点位的现实性
  *
  * ── 哪些**刻意不在**必填里 ────────────────────────────────────────
  *   preferences / pace / stroller。它们是有默认值（而且有依据）的产品策略 ——
@@ -131,7 +131,7 @@ export const REQUIRED_FIELDS: Array<keyof TravelParams> = [
   'city',
   'days',
   'startDate',
-  'childAge',
+  'childAges',
 ]
 
 /**

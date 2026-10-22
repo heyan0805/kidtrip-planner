@@ -82,7 +82,7 @@ public class PlanComposer {
             throw new LlmException("没有可用的候选景点，无法排行程");
         }
 
-        String prompt = buildPrompt(params, persona, pois, hotels, rules.spotsPerDay(params.pace()), legs);
+        String prompt = buildPrompt(params, persona, pois, hotels, rules.spotsPerDay(params.pace(), params.youngestChildAge()), legs);
         Exception lastError = null;
 
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -200,6 +200,11 @@ public class PlanComposer {
                     「把某一天留白让用户自己安排」不是一个选项：你交上来一个空天，
                     系统只能无视你的上下文、从候选池里硬补两个点，结果一定不如你排的合理。
                     真的觉得这天不该安排，就只排一个离住处最近的点，tips 里写清"这天以休整为主"。
+                22. 【多个孩子 / 大人多】用户的**节奏一律按最小的那个孩子算** ——
+                    走得动的是哥哥，走得不动的是弟弟，上限由弟弟决定。**不要取平均**：
+                    5 岁 + 10 岁不是"7.5 岁的节奏"，是 5 岁的节奏。
+                    同样，**大人多不能换来更多景点**：多一个大人省的是体力、排队和抱娃，
+                    不省时间。上面第 2 条给的上限就是上限，不要因为"人多好照应"而多排一个。
 
                 【输出格式】
                 只输出一个 JSON 对象，不要任何解释文字，不要 markdown 代码块标记。
@@ -358,7 +363,7 @@ public class PlanComposer {
         sb.append("目的地：").append(blankTo(p.city(), "未提供")).append('\n');
         sb.append("天数：").append(p.days() == null || p.days() <= 0 ? "未提供（按 3 天）" : p.days() + " 天").append('\n');
         sb.append("出发日期：").append(blankTo(p.startDate(), "未提供")).append('\n');
-        sb.append("孩子年龄：").append(p.childAge() == null ? "未提供" : p.childAge() + " 岁").append('\n');
+        sb.append("孩子年龄：").append(p.childAgesText() == null ? "未提供" : p.childAgesText()).append('\n');
         sb.append("节奏：").append(blankTo(p.pace(), "未指定（按每天 3 个点）")).append('\n');
         // 三态在这里落地：null 必须渲染成"未确认"，绝不能被渲染成"不需要"。
         sb.append("是否需要推车：").append(

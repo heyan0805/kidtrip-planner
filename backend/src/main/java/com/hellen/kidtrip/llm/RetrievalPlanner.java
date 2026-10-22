@@ -225,7 +225,7 @@ public class RetrievalPlanner {
                 String.valueOf(p.city()),
                 String.valueOf(p.days()),
                 String.valueOf(p.startDate()),
-                String.valueOf(p.childAge()),
+                String.valueOf(p.childAges()),
                 String.valueOf(p.pace()),
                 String.valueOf(p.stroller()),
                 p.preferences() == null ? "" : String.join(",", p.preferences()));
@@ -292,7 +292,7 @@ public class RetrievalPlanner {
         lines.add("城市：" + blankTo(p.city(), "未提供"));
         lines.add("天数：" + (p.days() == null || p.days() <= 0 ? "未确定" : p.days() + " 天"));
         lines.add("出发日期：" + blankTo(p.startDate(), "未提供"));
-        lines.add("孩子年龄：" + (p.childAge() == null || p.childAge() <= 0 ? "未确定" : p.childAge() + " 岁"));
+        lines.add("孩子年龄：" + (p.childAgesText() == null ? "未确定" : p.childAgesText()));
         lines.add("节奏：" + blankTo(p.pace(), "未指定"));
         lines.add("是否需要推车：" + (p.stroller() == null ? "未确认" : (p.stroller() ? "需要" : "不需要")));
         lines.add("用户偏好：" + (p.preferences() == null || p.preferences().isEmpty()
