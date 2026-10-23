@@ -726,8 +726,13 @@ function PlanView({
 
   return (
     <section className="mt-6 space-y-4">
-      <div className="ui-card p-4">
-        <h2 className="text-base font-semibold text-gh-fg">{plan.summary}</h2>
+      {/* 杂志开篇：小眉标 + 衬线大标题（Bolt 版"途见"的语言，字是我们的 summary）。
+          溯源数字收进小字行 —— 它是可信度的证据，不该抢标题的戏 */}
+      <div className="ui-card p-5">
+        <p className="text-[11px] font-semibold tracking-[0.3em] text-gh-accent">● YOUR ITINERARY</p>
+        <h2 className="mt-1.5 font-serif text-2xl font-semibold tracking-tight text-gh-fg">
+          {plan.summary}
+        </h2>
         <p className="mt-2 text-xs text-gh-fg-muted">
           查了 {plan.provenance.searchRounds} 轮飞猪 · 命中 {plan.provenance.candidatesFound} 条 ·
           可用 {plan.provenance.candidatesKept} 条 · 耗时 {(plan.provenance.elapsedMs / 1000).toFixed(1)} 秒
@@ -756,9 +761,9 @@ function PlanView({
       <div className="relative ml-2 space-y-4 pl-6 before:absolute before:bottom-6 before:left-[4.5px] before:top-6 before:w-px before:bg-gh-border">
         {days.map((d, i) => (
           <div key={d.day} className="relative">
-            {/* 圆点对准日期头的中线：卡片 p-4(16px) + 36px 缩略图行 / 2 - 圆点半径(5px) = 29px。
-                B 手加了缩略图之后日期头从 20px 变 36px，top-5 是对旧行高算的 —— 不改圆点就漂到标题上方。 */}
-            <span className="absolute -left-6 top-[29px] z-10 h-2.5 w-2.5 rounded-full bg-gh-fg-faint ring-4 ring-gh-canvas" />
+            {/* 圆点对准日期头（DAY 0N + 主题标题）的中线：p-5(20px) + DAY 行(20px) + 标题行约一半 —— 实测定在 44px。
+                日期头换过版式（36px 缩略图 → DAY 标签 + 衬线标题），圆点跟着重算过。 */}
+            <span className="absolute -left-6 top-[44px] z-10 h-2.5 w-2.5 rounded-full bg-gh-fg-faint ring-4 ring-gh-canvas" />
             <DayCard
               day={d}
               stay={stays.get(d.day)}
@@ -836,77 +841,41 @@ function DayCard({
   onSwap: (day: number, index: number, option: SpotOption) => void
   onRestore: (day: number, index: number) => void
 }) {
-  // 日期头缩略图：用当天**第一个点**的真图。
-  // 图源是飞猪 POI 自带的 imageUrl（后端一直在发，前端一直没用）——
-  // 不接 Unsplash/Places 那类图库：会配错图（把别的景点安在这天头上，
-  // 比没图更糟）、有限流、还让首屏多一个外网依赖。
-  // ⚠️ filter 的条件是 truthy：后端没图时发的是**空串**，不是"一张坏图"。
-  //
   // 存整条 spot 而不是只存 url：点开放大时要显示"这是哪个景点"，
   // 只留一个 url 的话，那行说明就只能写成"第 2 天的图"——等于没说。
   //
   // ⭐ 一整天的图都在这里（不是只有第一张）：一天常常排 2~3 个场景
   //    （上午动物园、下午科技馆），每张图讲的都是不同的事。
-  //    日期头只挂第一张当封面，其余的在放大层里左右翻 —— 一次看一张。
+  //    杂志化之后**不再有日期头小缩略图** —— 每个景点卡自带大图，
+  //    点某张图就从那张开始翻（ImageZoom 的 startIndex）。
   const coverSpots = day.spots.filter((s) => s.imageUrl)
-  const coverSpot = coverSpots[0]
-  // 36px 的缩略图看不清是什么地方（真实图多是景区门脸/远景），所以点开看大图。
-  const [zoomed, setZoomed] = useState(false)
-  // 图挂了就把这个入口关掉：留一个能点开、但点开是坏图的按钮，比没有更糟。
-  const [coverBroken, setCoverBroken] = useState(false)
+  // 放大层从哪张开始：null = 关着。数字 = coverSpots 的下标。
+  const [zoomIndex, setZoomIndex] = useState<number | null>(null)
 
   return (
-    <article className="ui-card p-4">
-      {/* min-h-9：有的天没图（后端给空串），标题会缩回一行高 ——
-          而左边时间轴的圆点是按"36px 的头"定位的，行高一抖圆点就歪。
-          锁死最小高度，有没有图圆点都在同一个位置。 */}
-      <h3 className="flex min-h-9 items-center gap-2.5 text-sm font-semibold text-gh-fg">
-        {coverSpot && (
-          /* 缩略图挂在外层按钮上而不是直接裸奔：
-             图片 404 时把 img 藏掉（visibility，不是 display——
-             外框尺寸不变，下面那个时间轴圆点是对着这个 36px 的头定位的，
-             布局一抖圆点就歪）。挂了的样子 = 一个浅灰空块，不顶歪任何东西。
-
-             用 button 而不是给 span 挂 onClick：键盘能 Tab 到、回车能打开，
-             且读屏会念出 aria-label —— 这三件事挂 onClick 的 div 全都没有。 */
-          <button
-            type="button"
-            onClick={() => setZoomed(true)}
-            disabled={coverBroken}
-            aria-label={
-              coverSpots.length > 1
-                ? `放大查看这天的 ${coverSpots.length} 张图（从「${coverSpot.name}」开始）`
-                : `放大查看「${coverSpot.name}」的图片`
-            }
-            title={coverBroken ? '这张图没加载出来' : '点开看大图'}
-            className="flex h-9 w-9 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded border border-gh-border bg-gh-canvas transition-opacity hover:opacity-80 disabled:cursor-default disabled:hover:opacity-100"
-          >
-            <img
-              src={coverSpot.imageUrl}
-              alt=""
-              loading="lazy"
-              referrerPolicy="no-referrer"
-              className={coverBroken ? 'invisible h-full w-full' : 'h-full w-full object-cover'}
-              onError={() => setCoverBroken(true)}
-            />
-          </button>
-        )}
-        <span>
-          {/* "第 N 天"用衬线：一页里最像"故事"的词就该长成故事的样子（编号叙事） */}
-          <span className="font-serif text-[15px]">第 {day.day} 天</span>
-          <span className="text-gh-fg-muted"> · {day.theme}</span>
+    <article className="ui-card p-5">
+      {/* 日期头：DAY 01（数字标签）+ 衬线主题标题 —— 杂志的"章节页"语言。
+          "第 N 天"保留在这一行里：它是用户嘴里说的词，也是既有探针的锚点 */}
+      <div className="flex items-baseline gap-2.5">
+        <span className="ui-num text-sm font-bold tracking-widest text-gh-accent">
+          DAY {String(day.day).padStart(2, '0')}
         </span>
+        <span className="text-xs text-gh-fg-faint">第 {day.day} 天</span>
+      </div>
+      <h3 className="mt-0.5 font-serif text-xl font-semibold tracking-tight text-gh-fg">
+        {day.theme}
       </h3>
 
       {/* 放大层。挂在卡片里而不是提到页面顶层：
           它是 fixed 定位，挂在哪都不影响位置；留在卡片里反而让它
           "服务于这一天的图"这层关系在代码里也是看得见的。 */}
-      {zoomed && coverSpot && (
+      {zoomIndex !== null && coverSpots.length > 0 && (
         <ImageZoom
-          // 一天的图全给它，第一张就是缩略图那张
+          // 一天的图全给它，从点的那张开始翻
           items={coverSpots.map((s) => ({ src: s.imageUrl, name: s.name, time: s.time }))}
+          startIndex={zoomIndex}
           dayLabel={`第 ${day.day} 天 · ${day.theme}`}
-          onClose={() => setZoomed(false)}
+          onClose={() => setZoomIndex(null)}
         />
       )}
 
@@ -916,19 +885,27 @@ function DayCard({
           后端"没有可说的"就给 null，这里就不渲染：宁可不解释，也不硬凑一句。 */}
       {day.why && <p className="mt-1 text-xs leading-relaxed text-gh-fg-muted">💡 {day.why}</p>}
 
-      <ul className="mt-3 space-y-2">
-        {day.spots.map((s, i) => (
-          <SpotRow
-            // key 用 poiId 而不是下标：换一个点之后它必须**重新挂载**，
-            // 否则"换一个"展开的那个列表会跟着旧点留在屏幕上 —— 而内容已经变了。
-            key={s.poiId}
-            spot={s}
-            swapped={swapKey(day.day, i) in swaps}
-            alternatives={alternatives}
-            onPick={(o) => onSwap(day.day, i, o)}
-            onRestore={() => onRestore(day.day, i)}
-          />
-        ))}
+      <ul className="mt-4 space-y-5">
+        {day.spots.map((s, i) => {
+          // 这张图在"当天的图集"里的位置：点它就从它开始翻（没有图就是 undefined）
+          const imgIdx = s.imageUrl
+            ? coverSpots.findIndex((c) => c.poiId === s.poiId)
+            : -1
+          return (
+            <SpotRow
+              // key 用 poiId 而不是下标：换一个点之后它必须**重新挂载**，
+              // 否则"换一个"展开的那个列表会跟着旧点留在屏幕上 —— 而内容已经变了。
+              key={s.poiId}
+              spot={s}
+              imageIndex={imgIdx >= 0 ? imgIdx : undefined}
+              onZoom={setZoomIndex}
+              swapped={swapKey(day.day, i) in swaps}
+              alternatives={alternatives}
+              onPick={(o) => onSwap(day.day, i, o)}
+              onRestore={() => onRestore(day.day, i)}
+            />
+          )
+        })}
         {day.spots.length === 0 && <li className="text-sm text-gh-fg-faint">这天还没排上点</li>}
       </ul>
 
@@ -1042,15 +1019,18 @@ function DayCard({
  */
 function ImageZoom({
   items,
+  startIndex,
   dayLabel,
   onClose,
 }: {
-  /** 这一天的图，按当天行程顺序。第一张就是日期头缩略图那张 */
+  /** 这一天的图，按当天行程顺序 */
   items: Array<{ src: string; name: string; time: string }>
+  /** 从哪张开始翻（点某个景点的大图进来就从那张开始）；缺省 0 */
+  startIndex?: number
   dayLabel: string
   onClose: () => void
 }) {
-  const [i, setI] = useState(0)
+  const [i, setI] = useState(startIndex ?? 0)
   // 挂了的是**哪几张**（记下标），不是"当前这张是不是坏的"。
   // 记下标的好处：翻回上一张时不用重置状态，也就不会闪一下空白。
   const [broken, setBroken] = useState<number[]>([])
@@ -1197,12 +1177,17 @@ function ImageZoom({
  */
 function SpotRow({
   spot,
+  imageIndex,
+  onZoom,
   swapped,
   alternatives,
   onPick,
   onRestore,
 }: {
   spot: TravelSpot
+  /** 这张图在"当天的图集"里的下标；undefined = 这个点没有图（后端发的是空串） */
+  imageIndex?: number
+  onZoom: (index: number) => void
   /** 这个点是用户换过的（不是模型排的） */
   swapped: boolean
   alternatives: Alternative[]
@@ -1210,34 +1195,57 @@ function SpotRow({
   onRestore: () => void
 }) {
   const [open, setOpen] = useState(false)
+  // 这张图挂没挂（飞猪商品图偶尔 404）：挂了就把图收起来，名字和建议还在 ——
+  // 卡片不塌，也不留一个点了没反应的入口
+  const [broken, setBroken] = useState(false)
 
   return (
     <li className="text-sm">
-      <div className="flex gap-3">
-        {/* 时间列：等宽 + 表格数字。比例字体里 "09:30" 比 "14:16" 窄一点，
-            一列时间扫下去就是波浪；tabular-nums 让每个数字占同一宽度，列才对得齐。
-            行高锁 leading-5（=右边点名的 text-sm 行高），否则时间会比名字高半行。 */}
+      {/* 首行：时间 · 名字 · 票价，一行扫完"几点去哪花多少"。
+          时间列仍是等宽 + 表格数字（比例字体里 "09:30" 比 "14:16" 窄，
+          一列扫下去是波浪），这条规矩从紧凑版一路沿用到杂志版 */}
+      <div className="flex items-baseline gap-3">
         <span className="ui-num w-12 shrink-0 text-[13px] leading-5 text-gh-fg-muted">{spot.time}</span>
-        <span className="flex-1">
-          <span className="text-gh-fg">{spot.name}</span>
-          {/* ⚠️ priceYuan 为 null 是"没有可售的票"，不是"免费" —— 所以写"票价未知" */}
-          <span className="ml-2 text-gh-fg-muted">
-            {spot.priceYuan === null ? '票价未知' : `¥${spot.priceYuan}`}
-          </span>
-          {swapped && (
-            <span className="ml-2 rounded-full bg-gh-accent-soft px-2 py-0.5 text-xs text-gh-accent">
-              换上的备选
-            </span>
-          )}
-          {spot.tips ? (
-            <span className="mt-1 block text-xs text-gh-fg-muted">{spot.tips}</span>
-          ) : swapped ? (
-            <span className="mt-1 block text-xs text-gh-fg-faint">
-              换上的备选没有游玩建议 —— 原来那句是按上一个点写的，留着会误导
-            </span>
-          ) : null}
+        <span className="min-w-0 flex-1 font-medium text-gh-fg">{spot.name}</span>
+        {/* ⚠️ priceYuan 为 null 是"没有可售的票"，不是"免费" —— 所以写"票价未知" */}
+        <span className="ui-num shrink-0 text-[13px] text-gh-fg-muted">
+          {spot.priceYuan === null ? '票价未知' : `¥${spot.priceYuan}`}
         </span>
       </div>
+
+      {/* 大图：杂志卡的主角。宽幅 16/7 裁切（飞猪商品图以竖图居多，统一裁成宽幅节奏才齐）；
+          点开进当天的图集、从这张开始翻。loading=lazy：一天 2~3 张、一趟十来张，
+          不 lazy 的话打开行程页就同时拉十几个外网请求 */}
+      {imageIndex !== undefined && !broken && (
+        <button
+          type="button"
+          onClick={() => onZoom(imageIndex)}
+          aria-label={`放大查看「${spot.name}」的图片`}
+          className="group mt-2.5 block w-full cursor-zoom-in overflow-hidden rounded-xl border border-gh-border-muted bg-gh-canvas"
+        >
+          <img
+            src={spot.imageUrl}
+            alt={spot.name}
+            loading="lazy"
+            referrerPolicy="no-referrer"
+            onError={() => setBroken(true)}
+            className="aspect-[16/7] w-full object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+          />
+        </button>
+      )}
+
+      {swapped && (
+        <span className="mt-1.5 inline-block rounded-full bg-gh-accent-soft px-2 py-0.5 text-xs text-gh-accent">
+          换上的备选
+        </span>
+      )}
+      {spot.tips ? (
+        <p className="mt-2 text-xs leading-relaxed text-gh-fg-muted">{spot.tips}</p>
+      ) : swapped ? (
+        <p className="mt-2 text-xs text-gh-fg-faint">
+          换上的备选没有游玩建议 —— 原来那句是按上一个点写的，留着会误导
+        </p>
+      ) : null}
 
       <div className="mt-1 flex items-center gap-3 pl-[60px] text-xs">
         <button

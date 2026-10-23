@@ -294,13 +294,17 @@ try {
           .filter((x) => x.tagName === 'LI')
           .map((li) => {
             const row = li.querySelector(':scope > div:nth-child(1)')
-            const nameBlock = row?.querySelector('span:nth-child(2)')
             const btns = [...li.querySelectorAll('button')]
             const swap = btns.find((b) => b.textContent.includes('换一个'))
             const picker = li.querySelector(':scope > div:last-child ul')
+            // 杂志版首行是「时间 | 名字 | 票价」三个并列 span，名字是第 2 个；
+            // 游玩建议（或换上备选的"没有建议"声明）是 li 的直接 <p>（原来是嵌套 span.block）
+            const name = row?.children[1]?.textContent?.trim() ?? null
+            const tips =
+              [...li.querySelectorAll(':scope > p')].map((p) => p.textContent.trim()).join(' ') || null
             return {
-              name: nameBlock?.querySelector('span:nth-child(1)')?.textContent?.trim() ?? null,
-              tips: nameBlock?.querySelector('span.block')?.textContent?.trim() ?? null,
+              name,
+              tips,
               swapLabel: swap?.textContent?.trim() ?? null,
               swapDisabled: swap?.disabled ?? null,
               hasRestore: btns.some((b) => b.textContent.includes('恢复原样')),
@@ -351,6 +355,18 @@ try {
   check(spots[0].name === mockBase.name && spots[0].tips === mockBase.tips,
     '⭐ 「恢复原样」把名字和建议都精确还回来了',
     `${mockBase.name} / ${mockBase.tips}`)
+
+  /* ── ②b 点第二个点的大图 → 放大层从**那张**开始（杂志版的 startIndex 链路）──
+     mock 里每个点都有图；第 1 天有 2 个点，点第 2 个的图应该看到 "2 / 2"。 */
+  await page.locator('article').nth(0)
+    .locator('li button[aria-label*="放大"]').nth(1).click()
+  await page.waitForTimeout(300)
+  const zoomText = await page.locator('[role="dialog"]').innerText()
+  check(zoomText.includes('2 / 2') && zoomText.includes('示例景点 101'),
+    '⭐ 点第 2 个点的图，放大层从那张开始（不是永远从第一张）',
+    zoomText.replace(/\s+/g, ' ').slice(0, 80))
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(200)
 
   /* ── ③ 看起来必须像降级 ─────────────────────────────────────── */
   await page.screenshot({ path: `${SHOTS}mock-ui-swap.png`, fullPage: true })

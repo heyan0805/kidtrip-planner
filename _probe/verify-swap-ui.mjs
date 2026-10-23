@@ -102,13 +102,14 @@ async function readPlan() {
         spots: lis.map((li) => {
           // 第一行是「时刻 | 名字/价格/tips」，第二行是按钮，第三行（可选）是清单
           const row = li.querySelector(':scope > div:nth-child(1)')
-          const time = row?.querySelector('span')?.textContent?.trim() ?? null
-          const nameBlock = row?.querySelector('span:nth-child(2)')
-          const name = nameBlock?.querySelector('span:nth-child(1)')?.textContent?.trim() ?? null
-          // 姓名块里那个 `block` 的 span 才是游玩建议。
-          // ⚠️ 不能用 "text-xs" 选它 —— "换上的备选"那个小标签也带 text-xs，
+          // 杂志版首行：「时间 | 名字 | 票价」三个并列 span
+          const time = row?.children[0]?.textContent?.trim() ?? null
+          const name = row?.children[1]?.textContent?.trim() ?? null
+          // 游玩建议（或"换上的备选没有游玩建议"）是 li 的直接 <p>。
+          // ⚠️ 不能用 text-xs 之类的样式选它 —— "换上的备选"小标签也带小字样式，
           //    而它就是**换完之后**才出现的东西，用它选会在最该检查的时候选错元素。
-          const tips = nameBlock?.querySelector('span.block')?.textContent?.trim() ?? null
+          const tips =
+            [...li.querySelectorAll(':scope > p')].map((p) => p.textContent.trim()).join(' ') || null
           const btns = [...li.querySelectorAll('button')]
           const swap = btns.find((b) => b.textContent.includes('换一个'))
           const picker = li.querySelector(':scope > div:last-child ul')
