@@ -5,7 +5,7 @@
 
 - Spring Boot **4.1.1** · Java **21** · LangChain4j **1.18.1** · 通义千问（`qwen3.8-flash`，百炼 OpenAI 兼容网关）
 - 端口 **8003**（参照工程是 8002，两个可以同时跑）
-- 66 个源文件 / 9934 行 · 26 个测试类 / **378** 个用例
+- 67 个源文件 / 10025 行 · 27 个测试类 / **382** 个用例
 
 > 前端说明见 [`../frontend/README.md`](../frontend/README.md)；
 > 想先看整体架构和产品原则，读仓库根的 [`../README.md`](../README.md)。
@@ -512,15 +512,16 @@ prompt 里不给模型经纬度数字（让 LLM 比两串坐标是碰运气）�
 
 ```bash
 cd backend
-mvn test          # 378 个用例
+mvn test          # 382 个用例
 mvn test -Dtest=LegServiceTest    # 单个类
 ```
 
-**378 / 378 全绿**，26 个测试类 / 6209 行（另有 1 个测试替身 `FakeChatModel`）。分布（用例数）：
+**382 / 382 全绿**，27 个测试类 / 6269 行（另有 1 个测试替身 `FakeChatModel`）。分布（用例数）：
 
 | 测试类 | 数量 | 护住什么 |
 |---|---|---|
 | `retrieval/LegServiceTest` | 38 | 城际班次挑选（火车 + 机票）：去程/回程时段窗口、**最快的首班车不能胜出**、超限仍然给车、跨午夜不算合格、机票不发时长筛选且只留直达 |
+| `plan/DailyGenerateGuardTest` | 4 | 每日生成闸门：**妈妈群超限被拒**（拒绝文案是人话）、主入口在妈妈群爆掉时**仍然放行**、limit=0 不限流、跨天计数清零 |
 | `llm/ChatComposerTest` | 28 | 画像抽取与合并；persona：**过闸门才透传**（编造依据整条丢弃且 reply 不受影响）、prompt 里有维度表和已有判断 |
 | `plan/PersonaGuardTest` | 24 | persona 闸门：**编造的 evidence 逐字回查后进不去**、assistant 自己说的不算依据、自造 key 进不去、太短的依据不算、被丢的那条**不会连坐**后面那条、真话必须进得去 |
 | `plan/PlanAssemblerTest` | 24 | 装配：编号回填、缺字段、顺序 |

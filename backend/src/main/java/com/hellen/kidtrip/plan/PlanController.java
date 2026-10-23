@@ -43,11 +43,14 @@ public class PlanController {
     private final PlanService planService;
     private final ChatService chatService;
     private final GenerationProgress progress;
+    private final DailyGenerateGuard dailyGuard;
 
-    public PlanController(PlanService planService, ChatService chatService, GenerationProgress progress) {
+    public PlanController(PlanService planService, ChatService chatService, GenerationProgress progress,
+                          DailyGenerateGuard dailyGuard) {
         this.planService = planService;
         this.chatService = chatService;
         this.progress = progress;
+        this.dailyGuard = dailyGuard;
     }
 
     /** 对话引导：把出行信息一轮一轮问清楚 */
@@ -70,7 +73,14 @@ public class PlanController {
     @PostMapping("/generate")
     public ApiResult<TravelPlan> generate(
             @RequestBody PlanGenerateRequest request,
-            @RequestHeader(value = "X-Run-Id", required = false) String runId) {
+            @RequestHeader(value = "X-Run-Id", required = false) String runId,
+            @RequestHeader(value = "X-Entry", required = false) String entry) {
+        // 每日闸门只认 nginx 打的入口标记（8080 口令入口 = mama，主入口不带）。
+        // 拒绝时 message 会原样显示在前端的错误条里，所以它必须是句人话。
+        String rejected = dailyGuard.tryAcquire(entry);
+        if (rejected != null) {
+            return ApiResult.fail(4290, rejected);
+        }
         return ApiResult.ok(planService.generate(request, runId));
     }
 
