@@ -71,7 +71,11 @@ try {
 
   async function send(text) {
     await page.fill('input', text)
-    await page.click('button:has-text("发送")')
+    // 首轮是 hero 大输入卡（圆形箭头按钮，没有"发送"文字）→ 走 Enter；
+    // 开聊后是普通输入行，仍点按钮（verify-l1 的焦点断言依赖这个）
+    const sendBtn = page.locator('button:has-text("发送")')
+    if ((await sendBtn.count()) > 0) await sendBtn.click()
+    else await page.press('input', 'Enter')
     await page.waitForSelector('text=正在想', { timeout: 8_000 }).catch(() => {})
     await page.waitForFunction(() => !document.body.innerText.includes('正在想'), null, {
       timeout: 30_000,

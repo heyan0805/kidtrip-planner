@@ -44,6 +44,13 @@ export default function TravelPlanner() {
   }, [chat.messages.length, chat.sending])
 
   const busy = chat.sending || chat.generating
+  /**
+   * 两阶段布局的开关：没开聊时整屏是 hero（大字 + 大输入卡），
+   * 第一条消息一发出就切回"聊天 + 右栏画像"的工作台。
+   * 画像/理解/CTA 回答的是"聊起来之后"的问题，首屏让位 ——
+   * 但"上下文看得见"的卖点不丢：hero 底部常驻一行"还差什么"。
+   */
+  const heroMode = chat.messages.length === 0
 
   /**
    * 一轮结束后，把光标送回输入框。
@@ -107,13 +114,7 @@ export default function TravelPlanner() {
               重新开始
             </button>
           </div>
-          {/* 副标题只说"我是干什么的"，不讲架构。
-              原来首屏只有标题 + 一个空聊天框 + 右边一张"待确认 ×8"的清单，
-              第一眼看起来像一张要填的表，而不是一个能替他干活的东西 ——
-              评委不会先读 README 再决定要不要用。 */}
-          <p className="mt-1.5 text-sm text-gh-fg-muted">
-            说一句想怎么玩，我去查真实的景点、酒店和车次，排出一份每个数字都能点开溯源的行程。
-          </p>
+          {/* 原来的页头副标题删了 —— 它的活儿交给 hero 的大字第二行，页头只留身份 */}
         </header>
 
         {/* Mock 提示。必须显眼 —— 不提示等于把假数据当成真结果给用户 */}
@@ -123,6 +124,103 @@ export default function TravelPlanner() {
           </div>
         )}
 
+        {/* ── Hero 首屏（还没开聊）──────────────────────────
+            参照 Bolt 版"途见"的骨架：小徽章 + 两行大字（黑/灰）+ 大输入卡 + 示例 chips。
+            文案全部沿用我们自己的（"字按我们的来"）；
+            "AI 会综合路线、预算和节奏"这类没做的能力不写 —— 写了就是假的。 */}
+        {heroMode && (
+          <section className="mx-auto mt-4 flex min-h-[64vh] max-w-2xl flex-col items-center justify-center text-center sm:mt-6">
+            <span className="rounded-full border border-gh-border bg-white px-3 py-1 text-xs text-gh-fg-muted">
+              ✈ 不瞎猜，缺什么就问什么
+            </span>
+            <h2 className="mt-5 font-serif font-semibold tracking-tight">
+              {/* 主句大而黑；次句小一号且压灰 —— 它说的是"接下来会发生什么"，
+                  字号必须明显低于主句，否则两行打架（第一版就是反的） */}
+              <span className="block text-5xl text-gh-fg">说说你的计划</span>
+              <span className="mt-2 block text-2xl text-gh-fg-faint sm:text-[27px]">
+                我去查真实的景点、酒店和车次
+              </span>
+            </h2>
+            <p className="mt-4 text-sm text-gh-fg-muted">
+              排出一份每个数字都能点开溯源的行程。
+              怕走路、要午睡、想避开人多这些细节都能直接说。
+            </p>
+
+            {/* 大输入卡：首屏唯一的操作入口，所以做成主角 */}
+            <div className="mt-8 w-full rounded-2xl border border-gh-border bg-white p-4 text-left shadow-[0_1px_3px_rgba(90,113,96,0.07),0_6px_16px_rgba(90,113,96,0.05)]">
+              <div className="flex items-center gap-3">
+                <input
+                  ref={inputRef}
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    // 中文输入法在组词过程中也会触发 Enter（keyCode 229），
+                    // 不挡的话会出现"字还没选完就发出去了"。isComposing 就是给这个用的。
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                      e.preventDefault()
+                      void submit()
+                    }
+                  }}
+                  placeholder={
+                    busy
+                      ? '请稍等这一轮结束…'
+                      // 占位符顺便当"怎么问"的示范：给结构（谁+去哪+几天），不给具体答案
+                      : '说说你的计划，例如：想带俩娃去海边玩 3 天，不想太赶'
+                  }
+                  disabled={busy}
+                  className="h-10 min-w-0 flex-1 bg-transparent text-base text-gh-fg outline-none placeholder:text-gh-fg-faint disabled:opacity-60"
+                />
+                <button
+                  type="button"
+                  aria-label="发送"
+                  onClick={() => void submit()}
+                  disabled={busy || !draft.trim()}
+                  className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-sage-gradient text-white shadow-[0_1px_3px_rgba(79,138,104,0.35)] hover:brightness-95 disabled:opacity-50"
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5" aria-hidden>
+                    <path d="M5 12h14M13 6l6 6-6 6" />
+                  </svg>
+                </button>
+              </div>
+              <div className="mt-2 flex items-center justify-between border-t border-gh-border-muted pt-2.5 text-xs text-gh-fg-faint">
+                <span>按 Enter 发送</span>
+                <span>AI 会接着问你还没说的信息</span>
+              </div>
+            </div>
+
+            {/* 一键示例：评委的真实处境是"不知道能问什么、也懒得想"。
+                三个都自带出发地，点下去到看见行程少一轮追问。
+                ⚠️ 只留这一组入口：同屏两组"你可以这样问"只会让人犹豫点哪个。 */}
+            <div data-probe="examples" className="mt-5 flex flex-wrap justify-center gap-2">
+              {EXAMPLES.map((ex) => (
+                <button
+                  key={ex.label}
+                  type="button"
+                  // 直接发、不走输入框：多一步"填进去"就多一次放弃的机会。
+                  disabled={busy}
+                  onClick={() => void chat.sendRound(ex.text)}
+                  className={
+                    'rounded-full border px-3.5 py-2 text-[13px] text-gh-fg disabled:opacity-50 ' +
+                    ex.tone
+                  }
+                >
+                  {/* icon 单独 span：探针按 [data-label] 抠文字，emoji 不掺进断言 */}
+                  <span aria-hidden className="mr-1">{ex.icon}</span>
+                  <span data-label>{ex.label}</span>
+                </button>
+              ))}
+            </div>
+
+            {/* "上下文看得见"的卖点在 hero 阶段的存续形式：
+                不摆整张画像卡，但"还差什么"始终一句话可见。
+                开聊后右栏全套回来（见下面工作台布局）。 */}
+            <p className="mt-4 text-xs text-gh-fg-muted">
+              还差{missingLabels(chat.missingFields)} —— 这几项各自直接决定查什么、怎么排。
+            </p>
+          </section>
+        )}
+
+        {!heroMode && (
         <div className="mt-6 grid gap-6 md:grid-cols-[1fr_320px]">
           {/* ── 左：对话区 ────────────────────────────────── */}
           <section className="ui-card flex min-h-[520px] flex-col">
@@ -137,54 +235,7 @@ export default function TravelPlanner() {
               <span className="text-gh-fg-faint">真实数据 · 行程可溯源</span>
             </div>
             <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto p-4">
-              {chat.messages.length === 0 && (
-                // 居中的 hero 空态：这半屏是首屏主角，一行小灰字撑不起"欢迎来用"的姿态。
-                // 效果图顶部那枚小徽章不抄 —— 头部已有 logo + AI 亲子版徽标，再摆一个是重复。
-                <div className="flex h-full flex-col items-center justify-center gap-5 text-center">
-                  <div>
-                    {/* 英文小眉标 + 衬线大标题：杂志的排版语言（编号、字距、衬线），
-                        借它三招就能把"工具"衬出"作品"感 —— 全站换衬线是另一个极端，
-                        界面的正文仍然是无衬线，衬线只出现在叙事的位置 */}
-                    <p className="text-[11px] font-medium uppercase tracking-[0.35em] text-gh-fg-faint">
-                      Family Trip · Real Data
-                    </p>
-                    <p className="mt-2 font-serif text-3xl font-semibold tracking-tight text-gh-fg">
-                      说说你的计划 ——
-                    </p>
-                    <p className="mx-auto mt-2 max-w-md text-sm text-gh-fg-muted">
-                      我会一轮轮把信息问清楚，再真的去查。
-                      怕走路、要午睡、想避开人多这些细节都能直接说。
-                    </p>
-                  </div>
-                  {/* 一键示例：评委的真实处境是"不知道能问什么、也懒得想"。
-                      三个都自带出发地，点下去到看见行程少一轮追问 —— 十几秒换来的是
-                      他愿不愿意继续看下去。
-                      ⚠️ 只留这一组入口：另一个方案在中间还摆三张"建议问题"卡，
-                      和这两个 chips 功能重复，同屏两组"你可以这样问"只会让人犹豫点哪个。 */}
-                  <div>
-                    <p className="text-xs font-medium text-gh-fg-muted">没想好？点一个，直接发出去：</p>
-                    <div data-probe="examples" className="mt-2 flex flex-wrap justify-center gap-2">
-                      {EXAMPLES.map((ex) => (
-                        <button
-                          key={ex.label}
-                          type="button"
-                          // 直接发、不走输入框：多一步"填进去"就多一次放弃的机会。
-                          disabled={busy}
-                          onClick={() => void chat.sendRound(ex.text)}
-                          className={
-                            'rounded-full border px-3.5 py-2 text-[13px] text-gh-fg disabled:opacity-50 ' +
-                            ex.tone
-                          }
-                        >
-                          {/* icon 单独 span：探针按 [data-label] 抠文字，emoji 不掺进断言 */}
-                          <span aria-hidden className="mr-1">{ex.icon}</span>
-                          <span data-label>{ex.label}</span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
+              {/* 空态搬出去了：没开聊时整个工作台都让位给 hero，这里只会看到消息 */}
               {chat.messages.map((m) => (
                 // key 用消息自己的 id 而不是数组下标：列表是追加式的，
                 // 但下标 key 在"前面插入/删除"时会错位到别的消息上（React 会复用错的 DOM）
@@ -293,6 +344,7 @@ export default function TravelPlanner() {
             {chat.generating && <GeneratingPanel progress={chat.progress} />}
           </aside>
         </div>
+        )}
 
         {chat.plan && (
           <PlanView
