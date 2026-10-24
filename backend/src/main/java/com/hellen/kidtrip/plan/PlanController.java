@@ -44,19 +44,26 @@ public class PlanController {
     private final ChatService chatService;
     private final GenerationProgress progress;
     private final DailyGenerateGuard dailyGuard;
+    private final ProfileLog profileLog;
 
     public PlanController(PlanService planService, ChatService chatService, GenerationProgress progress,
-                          DailyGenerateGuard dailyGuard) {
+                          DailyGenerateGuard dailyGuard, ProfileLog profileLog) {
         this.planService = planService;
         this.chatService = chatService;
         this.progress = progress;
         this.dailyGuard = dailyGuard;
+        this.profileLog = profileLog;
     }
 
     /** 对话引导：把出行信息一轮一轮问清楚 */
     @PostMapping("/chat")
-    public ApiResult<PlanChatData> chat(@RequestBody PlanChatRequest request) {
-        return ApiResult.ok(chatService.chat(request));
+    public ApiResult<PlanChatData> chat(@RequestBody PlanChatRequest request,
+            @RequestHeader(value = "X-Entry", required = false) String entry) {
+        PlanChatData data = chatService.chat(request);
+        // 画像留痕：params 是这轮合并后的累计画像 —— "妈妈们都在问哪"从这条日志统计
+        profileLog.record("chat", entry, data.params(), data.persona(),
+                request.messages() == null ? null : request.messages().size());
+        return ApiResult.ok(data);
     }
 
     /**
@@ -75,6 +82,8 @@ public class PlanController {
             @RequestBody PlanGenerateRequest request,
             @RequestHeader(value = "X-Run-Id", required = false) String runId,
             @RequestHeader(value = "X-Entry", required = false) String entry) {
+        // 画像留痕：记在闸门**之前** —— 被限额拒掉的请求同样是需求信号
+        profileLog.record("generate", entry, request.params(), request.persona(), null);
         // 每日闸门只认 nginx 打的入口标记（8080 口令入口 = mama，主入口不带）。
         // 拒绝时 message 会原样显示在前端的错误条里，所以它必须是句人话。
         String rejected = dailyGuard.tryAcquire(entry);
